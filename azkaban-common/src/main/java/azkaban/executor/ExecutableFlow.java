@@ -44,6 +44,8 @@ public class ExecutableFlow extends ExecutableFlowBase {
   public static final String LASTMODIFIEDTIME_PARAM = "lastModfiedTime";
   public static final String LASTMODIFIEDUSER_PARAM = "lastModifiedUser";
   public static final String SLAOPTIONS_PARAM = "slaOptions";
+  public static final String AZKABANFLOWVERSION_PARAM = "azkabanFlowVersion";
+  public static final String IS_LOCKED_PARAM = "isLocked";
   private final HashSet<String> proxyUsers = new HashSet<>();
   private int executionId = -1;
   private int scheduleId = -1;
@@ -56,7 +58,8 @@ public class ExecutableFlow extends ExecutableFlowBase {
   private String submitUser;
   private String executionPath;
   private ExecutionOptions executionOptions;
-  private List<SlaOption> slaOptions = new ArrayList<>();
+  private double azkabanFlowVersion;
+  private boolean isLocked;
 
   public ExecutableFlow(final Project project, final Flow flow) {
     this.projectId = project.getId();
@@ -65,6 +68,8 @@ public class ExecutableFlow extends ExecutableFlowBase {
     this.scheduleId = -1;
     this.lastModifiedTimestamp = project.getLastModifiedTimestamp();
     this.lastModifiedUser = project.getLastModifiedUser();
+    setAzkabanFlowVersion(flow.getAzkabanFlowVersion());
+    setLocked(flow.isLocked());
     this.setFlow(project, flow);
   }
 
@@ -103,14 +108,6 @@ public class ExecutableFlow extends ExecutableFlowBase {
 
   public void setExecutionOptions(final ExecutionOptions options) {
     this.executionOptions = options;
-  }
-
-  public List<SlaOption> getSlaOptions() {
-    return this.slaOptions;
-  }
-
-  public void setSlaOptions(final List<SlaOption> slaOptions) {
-    this.slaOptions = slaOptions;
   }
 
   @Override
@@ -209,6 +206,18 @@ public class ExecutableFlow extends ExecutableFlowBase {
     this.submitTime = submitTime;
   }
 
+  public double getAzkabanFlowVersion() {
+    return this.azkabanFlowVersion;
+  }
+
+  public void setAzkabanFlowVersion(final double azkabanFlowVersion) {
+    this.azkabanFlowVersion = azkabanFlowVersion;
+  }
+
+  public boolean isLocked() { return this.isLocked; }
+
+  public void setLocked(boolean locked) { this.isLocked = locked; }
+
   @Override
   public Map<String, Object> toObject() {
     final HashMap<String, Object> flowObj = new HashMap<>();
@@ -227,9 +236,9 @@ public class ExecutableFlow extends ExecutableFlowBase {
     flowObj.put(VERSION_PARAM, this.version);
     flowObj.put(LASTMODIFIEDTIME_PARAM, this.lastModifiedTimestamp);
     flowObj.put(LASTMODIFIEDUSER_PARAM, this.lastModifiedUser);
+    flowObj.put(AZKABANFLOWVERSION_PARAM, this.azkabanFlowVersion);
 
     flowObj.put(EXECUTIONOPTIONS_PARAM, this.executionOptions.toObject());
-    flowObj.put(VERSION_PARAM, this.version);
 
     final ArrayList<String> proxyUserList = new ArrayList<>(this.proxyUsers);
     flowObj.put(PROXYUSERS_PARAM, proxyUserList);
@@ -237,9 +246,12 @@ public class ExecutableFlow extends ExecutableFlowBase {
     flowObj.put(SUBMITTIME_PARAM, this.submitTime);
 
     final List<Map<String, Object>> slaOptions = new ArrayList<>();
-    this.getSlaOptions().stream().forEach((slaOption) -> slaOptions.add(slaOption.toObject()));
+    this.executionOptions.getSlaOptions().stream()
+        .forEach((slaOption) -> slaOptions.add(slaOption.toObject()));
 
     flowObj.put(SLAOPTIONS_PARAM, slaOptions);
+
+    flowObj.put(IS_LOCKED_PARAM, this.isLocked);
 
     return flowObj;
   }
@@ -260,6 +272,7 @@ public class ExecutableFlow extends ExecutableFlowBase {
     this.lastModifiedTimestamp = flowObj.getLong(LASTMODIFIEDTIME_PARAM);
     this.lastModifiedUser = flowObj.getString(LASTMODIFIEDUSER_PARAM);
     this.submitTime = flowObj.getLong(SUBMITTIME_PARAM);
+    this.azkabanFlowVersion = flowObj.getDouble(AZKABANFLOWVERSION_PARAM);
 
     if (flowObj.containsKey(EXECUTIONOPTIONS_PARAM)) {
       this.executionOptions =
@@ -279,8 +292,10 @@ public class ExecutableFlow extends ExecutableFlowBase {
       final List<SlaOption> slaOptions =
           flowObj.getList(SLAOPTIONS_PARAM).stream().map(SlaOption::fromObject)
               .collect(Collectors.toList());
-      this.setSlaOptions(slaOptions);
+      this.executionOptions.setSlaOptions(slaOptions);
     }
+
+    this.setLocked(flowObj.getBool(IS_LOCKED_PARAM, false));
   }
 
   @Override

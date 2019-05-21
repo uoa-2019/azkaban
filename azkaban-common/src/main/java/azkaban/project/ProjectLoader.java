@@ -23,6 +23,7 @@ import azkaban.user.User;
 import azkaban.utils.Props;
 import azkaban.utils.Triple;
 import java.io.File;
+import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -185,9 +186,10 @@ public interface ProjectLoader {
       throws ProjectManagerException;
 
   /**
-   * Cleans all project versions less tha
+   * Cleans all project versions less than the provided version, except the versions to exclude
+   * given as argument
    */
-  void cleanOlderProjectVersion(int projectId, int version)
+  void cleanOlderProjectVersion(int projectId, int version, final List<Integer> excludedVersions)
       throws ProjectManagerException;
 
   void updateProjectProperty(Project project, Props props)
@@ -200,4 +202,30 @@ public interface ProjectLoader {
       throws ProjectManagerException;
 
   void updateProjectSettings(Project project) throws ProjectManagerException;
+
+  /**
+   * Uploads flow file.
+   */
+  void uploadFlowFile(int projectId, int projectVersion, File flowFile, int flowVersion)
+      throws ProjectManagerException;
+
+  /**
+   * Gets flow file that's uploaded.
+   */
+  File getUploadedFlowFile(int projectId, int projectVersion, String flowFileName, int
+      flowVersion, final File tempDir)
+      throws ProjectManagerException, IOException;
+
+  /**
+   * Gets the latest flow version.
+   */
+  int getLatestFlowVersion(int projectId, int projectVersion, String flowName)
+      throws ProjectManagerException;
+
+  /**
+   * Check if flow file has been uploaded.
+   */
+  boolean isFlowFileUploaded(int projectId, int projectVersion)
+      throws ProjectManagerException;
+
 }

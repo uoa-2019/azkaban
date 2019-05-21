@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 LinkedIn Corp.
+ * Copyright 2017 LinkedIn Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,32 +16,47 @@
 
 package azkaban.execapp;
 
+import static java.lang.Thread.State.TIMED_WAITING;
+import static java.lang.Thread.State.WAITING;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import azkaban.Constants.JobProperties;
 import azkaban.event.Event;
-import azkaban.event.Event.Type;
 import azkaban.event.EventData;
 import azkaban.executor.ExecutableFlow;
 import azkaban.executor.ExecutableNode;
 import azkaban.executor.ExecutorLoader;
-import azkaban.executor.JavaJob;
+import azkaban.executor.InteractiveTestJob;
 import azkaban.executor.MockExecutorLoader;
-import azkaban.executor.SleepJavaJob;
 import azkaban.executor.Status;
-import azkaban.jobExecutor.ProcessJob;
+import azkaban.flow.CommonJobProperties;
 import azkaban.jobtype.JobTypeManager;
+import azkaban.jobtype.JobTypePluginSet;
+import azkaban.spi.EventType;
+import azkaban.test.TestUtils;
 import azkaban.utils.Props;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.InputStreamReader;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.charset.Charset;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashSet;
+import java.util.concurrent.TimeUnit;
 import org.apache.commons.io.FileUtils;
 import org.apache.log4j.Logger;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 
 public class JobRunnerTest {
 
+  public static final String SUBMIT_USER = "testUser";
   private final Logger logger = Logger.getLogger("JobRunnerTest");
   private File workingDir;
   private JobTypeManager jobtypeManager;
@@ -60,8 +75,8 @@ public class JobRunnerTest {
     this.workingDir.mkdirs();
     this.jobtypeManager =
         new JobTypeManager(null, null, this.getClass().getClassLoader());
-
-    this.jobtypeManager.getJobTypePluginSet().addPluginClass("java", JavaJob.class);
+    final JobTypePluginSet pluginSet = this.jobtypeManager.getJobTypePluginSet();
+    pluginSet.addPluginClass("test", InteractiveTestJob.class);
   }
 
   @After
@@ -73,45 +88,78 @@ public class JobRunnerTest {
     }
   }
 
-  @Ignore
   @Test
-  public void testBasicRun() {
+  public void testBasicRun() throws IOException {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, false, loader, eventCollector);
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector);
     final ExecutableNode node = runner.getNode();
 
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_STARTED, new EventData(node)));
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_STARTED, new EventData(node)));
     Assert.assertTrue(runner.getStatus() != Status.SUCCEEDED
-        || runner.getStatus() != Status.FAILED);
+        && runner.getStatus() != Status.FAILED);
 
     runner.run();
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_FINISHED, new EventData(node)));
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_FINISHED, new EventData(node)));
 
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue("Node status is " + node.getStatus(),
         node.getStatus() == Status.SUCCEEDED);
-    Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    Assert.assertTrue(node.getEndTime() - node.getStartTime() > 1000);
+    Assert.assertTrue(node.getStartTime() >= 0 && node.getEndTime() >= 0);
+    Assert.assertTrue(node.getEndTime() - node.getStartTime() >= 0);
 
     final File logFile = new File(runner.getLogFilePath());
     final Props outputProps = runner.getNode().getOutputProps();
     Assert.assertTrue(outputProps != null);
-    Assert.assertTrue(logFile.exists());
+
+    checkRequiredJobProperties(runner, logFile);
+
+    try (final BufferedReader br = getLogReader(logFile)) {
+      final String firstLine = br.readLine();
+      Assert.assertTrue("Unexpected default layout",
+          firstLine.startsWith(new SimpleDateFormat("dd-MM-yyyy").format(new Date())));
+    }
+    // Verify that user.to.proxy is default to submit user.
+    Assert.assertEquals(SUBMIT_USER, runner.getProps().get(JobProperties.USER_TO_PROXY));
 
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == 3);
 
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_STATUS_CHANGED, Type.JOB_FINISHED);
+    eventCollector
+        .assertEvents(EventType.JOB_STARTED, EventType.JOB_STATUS_CHANGED, EventType.JOB_FINISHED);
   }
 
-  @Ignore
+  private void checkRequiredJobProperties(JobRunner runner, File logFile) {
+    Field jobField = null;
+    try {
+      jobField = runner.getClass().getDeclaredField("job");
+    } catch (NoSuchFieldException e) {
+      Assert.fail("'job' field not found");
+    }
+    jobField.setAccessible(true);
+    InteractiveTestJob job = null;
+    try {
+      job = (InteractiveTestJob) jobField.get(runner);
+    } catch (IllegalAccessException e) {
+      Assert.fail("'job' field not accessible");
+    }
+    Props jobProps = job.getJobProps();
+    Assert.assertEquals("Unexpected log file path in properties",
+        logFile.getAbsolutePath(),
+        jobProps.get(CommonJobProperties.JOB_LOG_FILE));
+  }
+
+  private BufferedReader getLogReader(File logFile) throws FileNotFoundException {
+    return new BufferedReader(new InputStreamReader(new FileInputStream(logFile),
+        Charset.defaultCharset()));
+  }
+
   @Test
   public void testFailedRun() {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, true, loader, eventCollector);
+        createJobRunner(1, "testJob", 0, true, loader, eventCollector);
     final ExecutableNode node = runner.getNode();
 
     Assert.assertTrue(runner.getStatus() != Status.SUCCEEDED
@@ -120,18 +168,18 @@ public class JobRunnerTest {
 
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue(node.getStatus() == Status.FAILED);
-    Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    Assert.assertTrue(node.getEndTime() - node.getStartTime() > 1000);
+    Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() >= 0);
 
     final File logFile = new File(runner.getLogFilePath());
     final Props outputProps = runner.getNode().getOutputProps();
-    Assert.assertTrue(outputProps == null);
+    Assert.assertEquals(0, outputProps.size());
     Assert.assertTrue(logFile.exists());
     Assert.assertTrue(eventCollector.checkOrdering());
     Assert.assertTrue(!runner.isKilled());
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == 3);
 
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_STATUS_CHANGED, Type.JOB_FINISHED);
+    eventCollector
+        .assertEvents(EventType.JOB_STARTED, EventType.JOB_STATUS_CHANGED, EventType.JOB_FINISHED);
   }
 
   @Test
@@ -139,7 +187,7 @@ public class JobRunnerTest {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, false, loader, eventCollector);
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector);
     final ExecutableNode node = runner.getNode();
 
     node.setStatus(Status.DISABLED);
@@ -151,8 +199,8 @@ public class JobRunnerTest {
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue(node.getStatus() == Status.SKIPPED);
     Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    // Give it 10 ms to fail.
-    Assert.assertTrue(node.getEndTime() - node.getStartTime() < 10);
+    // Give it 2000 ms to fail.
+    Assert.assertTrue(node.getEndTime() - node.getStartTime() < 2000);
 
     // Log file and output files should not exist.
     final Props outputProps = runner.getNode().getOutputProps();
@@ -162,7 +210,7 @@ public class JobRunnerTest {
 
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == null);
 
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_FINISHED);
+    eventCollector.assertEvents(EventType.JOB_STARTED, EventType.JOB_FINISHED);
   }
 
   @Test
@@ -170,7 +218,7 @@ public class JobRunnerTest {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, false, loader, eventCollector);
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector);
     final ExecutableNode node = runner.getNode();
 
     node.setStatus(Status.KILLED);
@@ -183,8 +231,8 @@ public class JobRunnerTest {
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue(node.getStatus() == Status.KILLED);
     Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    // Give it 10 ms to fail.
-    Assert.assertTrue(node.getEndTime() - node.getStartTime() < 10);
+    // Give it 2000 ms to fail.
+    Assert.assertTrue(node.getEndTime() - node.getStartTime() < 2000);
 
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == null);
 
@@ -193,14 +241,11 @@ public class JobRunnerTest {
     Assert.assertTrue(outputProps == null);
     Assert.assertTrue(runner.getLogFilePath() == null);
     Assert.assertTrue(!runner.isKilled());
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_FINISHED);
+    eventCollector.assertEvents(EventType.JOB_STARTED, EventType.JOB_FINISHED);
   }
 
-  @Ignore
   @Test
-  // todo: HappyRay investigate if it is worth fixing this test. If not, remove it.
-  // The change history doesn't mention why this test was ignored.
-  public void testCancelRun() throws InterruptedException {
+  public void testCancelRun() throws Exception {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
@@ -210,54 +255,60 @@ public class JobRunnerTest {
     Assert.assertTrue(runner.getStatus() != Status.SUCCEEDED
         || runner.getStatus() != Status.FAILED);
 
-    final Thread thread = new Thread(runner);
-    thread.start();
+    final Thread thread = startThread(runner);
 
-    Thread.sleep(2000);
+    StatusTestUtils.waitForStatus(node, Status.RUNNING);
     runner.kill();
-    Thread.sleep(500);
+    assertThreadIsNotAlive(thread);
 
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue("Status is " + node.getStatus(),
         node.getStatus() == Status.KILLED);
     Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    // Give it 10 ms to fail.
+    // Give it some time to fail.
     Assert.assertTrue(node.getEndTime() - node.getStartTime() < 3000);
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == 3);
 
     // Log file and output files should not exist.
     final File logFile = new File(runner.getLogFilePath());
     final Props outputProps = runner.getNode().getOutputProps();
-    Assert.assertTrue(outputProps == null);
+    Assert.assertEquals(0, outputProps.size());
     Assert.assertTrue(logFile.exists());
     Assert.assertTrue(eventCollector.checkOrdering());
     Assert.assertTrue(runner.isKilled());
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_STATUS_CHANGED, Type.JOB_FINISHED);
+    eventCollector
+        .assertEvents(EventType.JOB_STARTED, EventType.JOB_STATUS_CHANGED, EventType.JOB_FINISHED);
   }
 
-  @Ignore
   @Test
-  public void testDelayedExecutionJob() {
+  public void testDelayedExecutionJob() throws Exception {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, false, loader, eventCollector);
-    runner.setDelayStart(5000);
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector);
+    runner.setDelayStart(10_000);
     final long startTime = System.currentTimeMillis();
     final ExecutableNode node = runner.getNode();
 
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_STARTED, new EventData(node)));
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_STARTED, new EventData(node)));
     Assert.assertTrue(runner.getStatus() != Status.SUCCEEDED);
 
-    runner.run();
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_FINISHED, new EventData(node)));
+    final Thread thread = startThread(runner);
+
+    // wait for job to get into delayExecution() -> wait()
+    assertThreadIsWaiting(thread);
+    // Wake up delayExecution() -> wait()
+    notifyWaiting(runner);
+    assertThreadIsNotAlive(thread);
+
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_FINISHED, new EventData(node)));
 
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue("Node status is " + node.getStatus(),
         node.getStatus() == Status.SUCCEEDED);
     Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
-    Assert.assertTrue(node.getEndTime() - node.getStartTime() > 1000);
-    Assert.assertTrue(node.getStartTime() - startTime >= 5000);
+    Assert.assertTrue(node.getEndTime() - node.getStartTime() >= 0);
+    Assert.assertTrue(node.getStartTime() - startTime >= 0);
 
     final File logFile = new File(runner.getLogFilePath());
     final Props outputProps = runner.getNode().getOutputProps();
@@ -267,40 +318,40 @@ public class JobRunnerTest {
     Assert.assertTrue(loader.getNodeUpdateCount(node.getId()) == 3);
 
     Assert.assertTrue(eventCollector.checkOrdering());
-    eventCollector.assertEvents(Type.JOB_STARTED, Type.JOB_STATUS_CHANGED, Type.JOB_FINISHED);
+    eventCollector
+        .assertEvents(EventType.JOB_STARTED, EventType.JOB_STATUS_CHANGED, EventType.JOB_FINISHED);
   }
 
   @Test
-  public void testDelayedExecutionCancelledJob() throws InterruptedException {
+  public void testDelayedExecutionCancelledJob() throws Exception {
     final MockExecutorLoader loader = new MockExecutorLoader();
     final EventCollectorListener eventCollector = new EventCollectorListener();
     final JobRunner runner =
-        createJobRunner(1, "testJob", 1, false, loader, eventCollector);
-    runner.setDelayStart(5000);
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector);
+    runner.setDelayStart(10_000);
     final long startTime = System.currentTimeMillis();
     final ExecutableNode node = runner.getNode();
 
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_STARTED, new EventData(node)));
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_STARTED, new EventData(node)));
     Assert.assertTrue(runner.getStatus() != Status.SUCCEEDED);
 
-    final Thread thread = new Thread(runner);
-    thread.start();
+    final Thread thread = startThread(runner);
 
     StatusTestUtils.waitForStatus(node, Status.READY);
-    // sleep so that job has time to get into delayExecution() -> wait()
-    Thread.sleep(1000L);
+    // wait for job to get into delayExecution() -> wait()
+    assertThreadIsWaiting(thread);
     runner.kill();
     StatusTestUtils.waitForStatus(node, Status.KILLED);
 
-    eventCollector.handleEvent(Event.create(null, Event.Type.JOB_FINISHED, new EventData(node)));
+    eventCollector.handleEvent(Event.create(null, EventType.JOB_FINISHED, new EventData(node)));
 
     Assert.assertTrue(runner.getStatus() == node.getStatus());
     Assert.assertTrue("Node status is " + node.getStatus(),
         node.getStatus() == Status.KILLED);
     Assert.assertTrue(node.getStartTime() > 0 && node.getEndTime() > 0);
     Assert.assertTrue(node.getEndTime() - node.getStartTime() < 1000);
-    Assert.assertTrue(node.getStartTime() - startTime >= 1000);
-    Assert.assertTrue(node.getStartTime() - startTime <= 4000);
+    Assert.assertTrue(node.getStartTime() - startTime >= 0);
+    Assert.assertTrue(node.getStartTime() - startTime <= 5000);
     Assert.assertTrue(runner.isKilled());
 
     final File logFile = new File(runner.getLogFilePath());
@@ -308,22 +359,32 @@ public class JobRunnerTest {
     Assert.assertTrue(outputProps == null);
     Assert.assertTrue(logFile.exists());
 
-    // sleep so that there's time to make the "DB update" for KILLED status
-    Thread.sleep(1000L);
-    Assert.assertEquals(2L, loader.getNodeUpdateCount("testJob").longValue());
-    Assert.assertEquals(2L, (long) loader.getNodeUpdateCount("testJob"));
-    eventCollector.assertEvents(Type.JOB_FINISHED);
+    // wait so that there's time to make the "DB update" for KILLED status
+    TestUtils.await().untilAsserted(
+        () -> assertThat(loader.getNodeUpdateCount("testJob")).isEqualTo(2));
+    eventCollector.assertEvents(EventType.JOB_FINISHED);
   }
 
-  private Props createProps(final int sleepSec, final boolean fail) {
-    final Props props = new Props();
-    props.put("type", "java");
+  @Test
+  public void testCustomLogLayout() throws IOException {
+    final MockExecutorLoader loader = new MockExecutorLoader();
+    final EventCollectorListener eventCollector = new EventCollectorListener();
+    final Props azkabanProps = new Props();
+    azkabanProps.put(JobProperties.JOB_LOG_LAYOUT, "TEST %c{1} %p - %m\n");
+    final JobRunner runner =
+        createJobRunner(1, "testJob", 0, false, loader, eventCollector, azkabanProps);
+    runner.run();
+    try (final BufferedReader br = getLogReader(runner.getLogFile())) {
+      final String firstLine = br.readLine();
+      Assert.assertTrue("Unexpected default layout",
+          firstLine.startsWith("TEST"));
+    }
+  }
 
-    props.put(JavaJob.JOB_CLASS, SleepJavaJob.class.getName());
+  private Props createProps(final int sleepSec, final boolean fail, Props props) {
+    props.put("type", "test");
     props.put("seconds", sleepSec);
-    props.put(ProcessJob.WORKING_DIR, this.workingDir.getPath());
     props.put("fail", String.valueOf(fail));
-
     return props;
   }
 
@@ -333,15 +394,16 @@ public class JobRunnerTest {
   }
 
   private JobRunner createJobRunner(final int execId, final String name, final int time,
-      final boolean fail, final ExecutorLoader loader, final EventCollectorListener listener,
-      final Props azkabanProps) {
+      final boolean fail, final ExecutorLoader loader, final EventCollectorListener listener, Props jobProps) {
+    final Props azkabanProps = new Props();
     final ExecutableFlow flow = new ExecutableFlow();
     flow.setExecutionId(execId);
+    flow.setSubmitUser(SUBMIT_USER);
     final ExecutableNode node = new ExecutableNode();
     node.setId(name);
     node.setParentFlow(flow);
 
-    final Props props = createProps(time, fail);
+    final Props props = createProps(time, fail, jobProps);
     node.setInputProps(props);
     final HashSet<String> proxyUsers = new HashSet<>();
     proxyUsers.add(flow.getSubmitUser());
@@ -353,4 +415,25 @@ public class JobRunnerTest {
     return runner;
   }
 
+  private void assertThreadIsWaiting(final Thread thread) throws Exception {
+    TestUtils.await().until(
+        () -> thread.getState() == TIMED_WAITING || thread.getState() == WAITING);
+  }
+
+  private void assertThreadIsNotAlive(final Thread thread) throws Exception {
+    thread.join(9000L);
+    TestUtils.await().atMost(1000L, TimeUnit.MILLISECONDS).until(() -> !thread.isAlive());
+  }
+
+  private void notifyWaiting(final Object monitor) {
+    synchronized (monitor) {
+      monitor.notifyAll();
+    }
+  }
+
+  private Thread startThread(final JobRunner runner) {
+    final Thread thread = new Thread(runner);
+    thread.start();
+    return thread;
+  }
 }

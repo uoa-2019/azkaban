@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 LinkedIn Corp.
+ * Copyright 2017 LinkedIn Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,13 +18,18 @@ package azkaban.utils;
 
 import azkaban.executor.ExecutableFlow;
 import azkaban.flow.Flow;
+import azkaban.project.DirectoryYamlFlowLoader;
 import azkaban.project.Project;
 import azkaban.test.executions.ExecutionsTestUtil;
 import azkaban.user.User;
 import azkaban.user.UserManager;
 import azkaban.user.XmlUserManager;
+import com.google.common.base.Charsets;
+import org.apache.commons.io.IOUtils;
+
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 
 /**
@@ -32,18 +37,14 @@ import java.util.HashMap;
  */
 public class TestUtils {
 
-  public static File getFlowDir(final String projectName, final String flow) {
-    return ExecutionsTestUtil.getFlowFile(projectName, flow + ".flow");
-  }
-
   public static User getTestUser() {
     return new User("testUser");
   }
 
   /* Helper method to create an ExecutableFlow from serialized description */
-  public static ExecutableFlow createExecutableFlow(final String projectName,
+  public static ExecutableFlow createTestExecutableFlow(final String projectName,
       final String flowName) throws IOException {
-    final File jsonFlowFile = getFlowDir(projectName, flowName);
+    final File jsonFlowFile = ExecutionsTestUtil.getFlowFile(projectName, flowName + ".flow");
     final HashMap<String, Object> flowObj =
         (HashMap<String, Object>) JSONUtils.parseJSONFromFile(jsonFlowFile);
 
@@ -57,6 +58,20 @@ public class TestUtils {
     return execFlow;
   }
 
+  /* Helper method to create an ExecutableFlow from Yaml */
+  public static ExecutableFlow createTestExecutableFlowFromYaml(final String projectName,
+      final String flowName) throws IOException {
+
+    final Project project = new Project(11, projectName);
+    final DirectoryYamlFlowLoader loader = new DirectoryYamlFlowLoader(new Props());
+    loader.loadProjectFlow(project, ExecutionsTestUtil.getFlowDir(projectName));
+    project.setFlows(loader.getFlowMap());
+    project.setVersion(123);
+
+    final Flow flow = project.getFlow(flowName);
+    return new ExecutableFlow(project, flow);
+  }
+
   /* Helper method to create an XmlUserManager from XML_FILE_PARAM file */
   public static UserManager createTestXmlUserManager() {
     final Props props = new Props();
@@ -65,4 +80,20 @@ public class TestUtils {
     final UserManager manager = new XmlUserManager(props);
     return manager;
   }
+
+  /**
+   * Reads a resource into a String
+   *
+   * @param name Relative path to the resource (relative to the parent object's package)
+   * @param parent Instance of the class to use in finding the resource. The resource is looked up in the same package
+   * where the class of the parent object is in.
+   * @return Resource content as a String
+   * @throws IOException if an I/O error occurs
+   */
+  public static String readResource(final String name, final Object parent) throws IOException {
+    try (final InputStream is = parent.getClass().getResourceAsStream(name)) {
+      return IOUtils.toString(is, Charsets.UTF_8).trim();
+    }
+  }
+
 }

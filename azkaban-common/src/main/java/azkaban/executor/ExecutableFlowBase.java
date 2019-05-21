@@ -27,6 +27,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ExecutableFlowBase extends ExecutableNode {
 
@@ -35,6 +37,7 @@ public class ExecutableFlowBase extends ExecutableNode {
   public static final String PROPERTIES_PARAM = "properties";
   public static final String SOURCE_PARAM = "source";
   public static final String INHERITED_PARAM = "inherited";
+  private static final Logger logger = LoggerFactory.getLogger(ExecutableFlowBase.class);
 
   private final HashMap<String, ExecutableNode> executableNodes =
       new HashMap<>();
@@ -134,8 +137,7 @@ public class ExecutableFlowBase extends ExecutableNode {
       final ExecutableNode targetNode = this.executableNodes.get(edge.getTargetId());
 
       if (sourceNode == null) {
-        System.out.println("Source node " + edge.getSourceId()
-            + " doesn't exist");
+        logger.info("Source node " + edge.getSourceId() + " doesn't exist");
       }
       sourceNode.addOutNode(edge.getTargetId());
       targetNode.addInNode(edge.getSourceId());
@@ -364,29 +366,6 @@ public class ExecutableFlowBase extends ExecutableNode {
     final TypedMapWrapper<String, Object> typedMapWrapper =
         new TypedMapWrapper<>(updateData);
     applyUpdateObject(typedMapWrapper, null);
-  }
-
-  public void reEnableDependents(final ExecutableNode... nodes) {
-    for (final ExecutableNode node : nodes) {
-      for (final String dependent : node.getOutNodes()) {
-        final ExecutableNode dependentNode = getExecutableNode(dependent);
-
-        if (dependentNode.getStatus() == Status.KILLED) {
-          dependentNode.setStatus(Status.READY);
-          dependentNode.setUpdateTime(System.currentTimeMillis());
-          reEnableDependents(dependentNode);
-
-          if (dependentNode instanceof ExecutableFlowBase) {
-
-            ((ExecutableFlowBase) dependentNode).reEnableDependents();
-          }
-        } else if (dependentNode.getStatus() == Status.SKIPPED) {
-          dependentNode.setStatus(Status.DISABLED);
-          dependentNode.setUpdateTime(System.currentTimeMillis());
-          reEnableDependents(dependentNode);
-        }
-      }
-    }
   }
 
   public String getFlowPath() {

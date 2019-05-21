@@ -65,6 +65,18 @@
     background-color: @flow-killed-color;
   }
 
+  // #ff9999 = killing vs. #3398cc = running
+  &.KILLING {
+    background-color: @flow-killing-color;
+    background-image: -webkit-gradient(linear, 0 100%, 100% 0, color-stop(0.25, rgba(255, 255, 255, 0.15)), color-stop(0.25, transparent), color-stop(0.5, transparent), color-stop(0.5, rgba(255, 255, 255, 0.15)), color-stop(0.75, rgba(255, 255, 255, 0.15)), color-stop(0.75, transparent), to(transparent));
+    background-image: -webkit-linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent);
+    background-image: -moz-linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent);
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.15) 50%, rgba(255, 255, 255, 0.15) 75%, transparent 75%, transparent);
+    background-size: 40px 40px;
+    -webkit-animation: progress-bar-stripes 2s linear infinite;
+            animation: progress-bar-stripes 2s linear infinite;
+  }
+
   &.RUNNING {
     background-color: @flow-running-color;
     background-image: -webkit-gradient(linear, 0 100%, 100% 0, color-stop(0.25, rgba(255, 255, 255, 0.15)), color-stop(0.25, transparent), color-stop(0.5, transparent), color-stop(0.5, rgba(255, 255, 255, 0.15)), color-stop(0.75, rgba(255, 255, 255, 0.15)), color-stop(0.75, transparent), to(transparent));
@@ -82,6 +94,10 @@
 
   &.CANCELLED {
     background-color: @flow-cancelled-color;
+  }
+
+  &.FAILED_SUCCEEDED {
+    background-color: @flow-failed-succeeded-color;
   }
 }
 
@@ -115,6 +131,10 @@ td {
       background-color: @flow-killed-color;
     }
 
+    &.KILLING {
+      background-color: @flow-killing-color;
+    }
+
     &.PAUSED {
       background-color: @flow-paused-color;
     }
@@ -140,6 +160,14 @@ td {
 
     &.CANCELLED {
       background-color: @flow-cancelled-color;
+    }
+
+    &.FAILED_SUCCEEDED {
+      background-color: @flow-failed-succeeded-color;
+    }
+
+    &.QUEUED {
+      background-color: @flow-queued-color;
     }
   }
 }
@@ -169,8 +197,16 @@ td {
     color: @flow-killed-color;
   }
 
+  &.KILLING {
+    color: @flow-killing-color;
+  }
+
   &.CANCELLED {
     color: @flow-cancelled-color;
+  }
+
+  &.FAILED_SUCCEEDED {
+    color: @flow-failed-succeeded-color;
   }
 
   &.FAILED_FINISHING {
@@ -189,8 +225,8 @@ td {
 
 .graph-sidebar-float {
   position: absolute;
-  top: 0px;
-  bottom: 0px;
+  top: 5px;
+  left: 110px;
 
   .graph-sidebar-list {
     overflow-y: auto;
@@ -310,7 +346,16 @@ li.tree-list-item {
       background-position: 0px 0px;
     }
 
+    &.KILLING .icon {
+      background-position: 0px 0px;
+    }
+
     &.CANCELLED .icon {
+      background-position: 0px 0px;
+      opacity: 0.5;
+    }
+
+    &.FAILED_SUCCEEDED .icon {
       background-position: 0px 0px;
       opacity: 0.5;
     }

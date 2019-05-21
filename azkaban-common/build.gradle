@@ -12,31 +12,14 @@
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- *
  */
 
-apply plugin: 'c'
-model {
-    components {
-        main(NativeExecutableSpec) {
-            sources {
-                c {
-                    source {
-                        srcDir "src/main"
-                        include "**/*.c"
-                    }
-                }
-            }
-        }
-    }
-}
-
 dependencies {
+    compile project(':az-core')
     compile project(':azkaban-spi')
     compile project(':azkaban-db')
 
     compile deps.collections
-    compile deps.commonsLang
     compile deps.dbcp2
     compile deps.dbutils
     compile deps.fileupload
@@ -47,20 +30,14 @@ dependencies {
     compileOnly deps.hadoopCommon
     compileOnly deps.hadoopHdfs
     compile deps.httpclient
-    compile deps.io
-    compile deps.jacksonCoreAsl
-    compile deps.jacksonMapperAsl
     compile deps.jetty
     compile deps.jettyUtil
-    compile deps.jexl
-    compile deps.jodaTime
     compile deps.jopt
     compile deps.mail
     compile deps.math3
     compile deps.metricsCore
     compile deps.metricsJvm
     compile deps.mysqlConnector
-    compile deps.quartz
     compile deps.snakeyaml
     compile deps.velocity
 
@@ -72,6 +49,7 @@ dependencies {
     testCompile deps.hadoopHdfs
     testCompile project(':test')
     testCompile project(path: ':azkaban-db', configuration: 'testOutput')
+    testCompile deps.commonsCompress
 }
 
 tasks.withType(JavaCompile) {

@@ -15,14 +15,20 @@
  */
 package azkaban.project;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+
 import azkaban.db.DatabaseOperator;
 import azkaban.flow.Flow;
 import azkaban.test.Utils;
+import azkaban.test.executions.ExecutionsTestUtil;
 import azkaban.user.Permission;
 import azkaban.user.User;
 import azkaban.utils.Md5Hasher;
 import azkaban.utils.Props;
 import azkaban.utils.Triple;
+import com.google.common.io.Files;
 import java.io.File;
 import java.io.IOException;
 import java.sql.SQLException;
@@ -30,6 +36,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -41,6 +48,13 @@ import org.junit.Test;
 public class JdbcProjectImplTest {
 
   private static final String SAMPLE_FILE = "sample_flow_01.zip";
+  private static final String BASIC_FLOW_YAML_DIR = "basicflowyamltest";
+  private static final String LARGE_FLOW_YAML_DIR = "largeflowyamltest";
+  private static final String BASIC_FLOW_FILE = "basic_flow.flow";
+  private static final String LARGE_FLOW_FILE = "large_file.flow";
+  private static final int PROJECT_ID = 123;
+  private static final int PROJECT_VERSION = 3;
+  private static final int FLOW_VERSION = 1;
   private static final Props props = new Props();
   private static DatabaseOperator dbOperator;
   private ProjectLoader loader;
@@ -88,6 +102,21 @@ public class JdbcProjectImplTest {
     Assert.assertEquals(project.getName(), projectName);
     Assert.assertEquals(project.getDescription(), projectDescription);
     Assert.assertEquals(project.getLastModifiedUser(), "testUser1");
+  }
+
+  @Test
+  public void testCreateProjectsWithDifferentCases() {
+    final String projectName = "mytestproject";
+    final String projectDescription = "This is my new project with lower cases.";
+    final User user = new User("testUser1");
+    this.loader.createNewProject(projectName, projectDescription, user);
+    final String projectName2 = "MYTESTPROJECT";
+    final String projectDescription2 = "This is my new project with UPPER CASES.";
+    assertThatThrownBy(
+        () -> this.loader.createNewProject(projectName2, projectDescription2, user))
+        .isInstanceOf(ProjectManagerException.class)
+        .hasMessageContaining(
+            "Active project with name " + projectName2 + " already exists in db.");
   }
 
   @Test
@@ -225,8 +254,7 @@ public class JdbcProjectImplTest {
     final Project project = this.loader.fetchProjectByName("mytestProject");
     Assert.assertEquals(project.isActive(), true);
     this.loader.removeProject(project, "testUser1");
-    final Project removedProject = this.loader.fetchProjectByName("mytestProject");
-    Assert.assertEquals(removedProject.isActive(), false);
+    Assert.assertNull(this.loader.fetchProjectByName("mytestProject"));
   }
 
   @Test
@@ -325,7 +353,7 @@ public class JdbcProjectImplTest {
   }
 
   @Test
-  public void cleanOlderProjectVersion() throws Exception {
+  public void cleanOlderProjectVersion() {
     createThreeProjects();
     final Project project = this.loader.fetchProjectByName("mytestProject");
     final File testFile = new File(getClass().getClassLoader().getResource(SAMPLE_FILE).getFile());
@@ -334,24 +362,105 @@ public class JdbcProjectImplTest {
 
     final ProjectFileHandler fileHandler = this.loader.getUploadedFile(project.getId(), newVersion);
     Assert.assertEquals(fileHandler.getNumChunks(), 1);
+    assertNumChunks(project, newVersion, 1);
 
-    this.loader.cleanOlderProjectVersion(project.getId(), newVersion + 1);
+    this.loader.cleanOlderProjectVersion(project.getId(), newVersion + 1, Collections.emptyList());
 
-    final ProjectFileHandler fileHandler2 = this.loader
-        .fetchProjectMetaData(project.getId(), newVersion);
-    Assert.assertEquals(fileHandler2.getNumChunks(), 0);
+    assertNumChunks(project, newVersion, 0);
+    assertGetUploadedFileOfCleanedVersion(project.getId(), newVersion);
+  }
+
+  @Test
+  public void cleanOlderProjectVersionExcludedVersion() {
+    createThreeProjects();
+    final Project project = this.loader.fetchProjectByName("mytestProject");
+    final File testFile = new File(getClass().getClassLoader().getResource(SAMPLE_FILE).getFile());
+    final int newVersion = this.loader.getLatestProjectVersion(project) + 1;
+    this.loader.uploadProjectFile(project.getId(), newVersion, testFile, "uploadUser1");
+    final int newVersion2 = this.loader.getLatestProjectVersion(project) + 1;
+    this.loader.uploadProjectFile(project.getId(), newVersion2, testFile, "uploadUser1");
+    this.loader.cleanOlderProjectVersion(project.getId(), newVersion2 + 1,
+        Arrays.asList(newVersion, newVersion2));
+    assertNumChunks(project, newVersion, 1);
+    assertNumChunks(project, newVersion2, 1);
+    this.loader.cleanOlderProjectVersion(project.getId(), newVersion2 + 1,
+        Arrays.asList(newVersion));
+    assertNumChunks(project, newVersion, 1);
+    assertNumChunks(project, newVersion2, 0);
+  }
+
+  private void assertNumChunks(final Project project, final int version, final int expectedChunks) {
+    final ProjectFileHandler fileHandler = this.loader
+        .fetchProjectMetaData(project.getId(), version);
+    Assert.assertEquals(expectedChunks, fileHandler.getNumChunks());
+  }
+
+  private void assertGetUploadedFileOfCleanedVersion(final int project, final int version) {
+    final Throwable thrown = catchThrowable(() -> this.loader.getUploadedFile(project, version));
+    assertThat(thrown).isInstanceOf(ProjectManagerException.class);
+    assertThat(thrown).hasMessageStartingWith(String.format("Got numChunks=0 for version %s of "
+        + "project %s - seems like this version has been cleaned up", version, project));
+  }
+
+  @Test
+  public void testUploadFlowFile() throws Exception {
+    final File testYamlFile = ExecutionsTestUtil.getFlowFile(BASIC_FLOW_YAML_DIR, BASIC_FLOW_FILE);
+    this.loader.uploadFlowFile(PROJECT_ID, PROJECT_VERSION, testYamlFile, FLOW_VERSION);
+    final File tempDir = Files.createTempDir();
+    tempDir.deleteOnExit();
+    final File file = this.loader
+        .getUploadedFlowFile(PROJECT_ID, PROJECT_VERSION, BASIC_FLOW_FILE, FLOW_VERSION, tempDir);
+    assertThat(file.getName()).isEqualTo(BASIC_FLOW_FILE);
+    assertThat(FileUtils.contentEquals(testYamlFile, file)).isTrue();
+  }
+
+  @Test
+  public void testDuplicateUploadFlowFileException() throws Exception {
+    final File testYamlFile = ExecutionsTestUtil.getFlowFile(BASIC_FLOW_YAML_DIR, BASIC_FLOW_FILE);
+    this.loader.uploadFlowFile(PROJECT_ID, PROJECT_VERSION, testYamlFile, FLOW_VERSION);
+
+    assertThatThrownBy(
+        () -> this.loader.uploadFlowFile(PROJECT_ID, PROJECT_VERSION, testYamlFile, FLOW_VERSION))
+        .isInstanceOf(ProjectManagerException.class)
+        .hasMessageContaining(
+            "Error uploading flow file " + BASIC_FLOW_FILE + ", version " + FLOW_VERSION + ".");
+  }
+
+  @Test
+  public void testUploadLargeFlowFileException() throws Exception {
+    final File testYamlFile = ExecutionsTestUtil.getFlowFile(LARGE_FLOW_YAML_DIR, LARGE_FLOW_FILE);
+
+    assertThatThrownBy(
+        () -> this.loader.uploadFlowFile(PROJECT_ID, PROJECT_VERSION, testYamlFile, FLOW_VERSION))
+        .isInstanceOf(ProjectManagerException.class)
+        .hasMessageContaining(
+            "Flow file length exceeds 10 MB limit.");
+  }
+
+  @Test
+  public void testGetLatestFlowVersion() throws Exception {
+    final File testYamlFile = ExecutionsTestUtil.getFlowFile(BASIC_FLOW_YAML_DIR, BASIC_FLOW_FILE);
+
+    assertThat(
+        this.loader.getLatestFlowVersion(PROJECT_ID, PROJECT_VERSION, testYamlFile.getName()))
+        .isEqualTo(0);
+    this.loader.uploadFlowFile(PROJECT_ID, PROJECT_VERSION, testYamlFile, FLOW_VERSION);
+    assertThat(
+        this.loader.getLatestFlowVersion(PROJECT_ID, PROJECT_VERSION, testYamlFile.getName()))
+        .isEqualTo(FLOW_VERSION);
   }
 
   @After
   public void clearDB() {
     try {
-      dbOperator.update("DELETE FROM projects");
-      dbOperator.update("DELETE FROM project_versions");
-      dbOperator.update("DELETE FROM project_properties");
-      dbOperator.update("DELETE FROM project_permissions");
-      dbOperator.update("DELETE FROM project_flows");
-      dbOperator.update("DELETE FROM project_files");
-      dbOperator.update("DELETE FROM project_events");
+      dbOperator.update("TRUNCATE TABLE projects");
+      dbOperator.update("TRUNCATE TABLE project_versions");
+      dbOperator.update("TRUNCATE TABLE project_properties");
+      dbOperator.update("TRUNCATE TABLE project_permissions");
+      dbOperator.update("TRUNCATE TABLE project_flows");
+      dbOperator.update("TRUNCATE TABLE project_files");
+      dbOperator.update("TRUNCATE TABLE project_events");
+      dbOperator.update("TRUNCATE TABLE project_flow_files");
     } catch (final SQLException e) {
       e.printStackTrace();
     }

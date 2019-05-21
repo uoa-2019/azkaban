@@ -16,8 +16,8 @@
 
 package azkaban.executor;
 
-import azkaban.database.EncodingType;
 import azkaban.db.DatabaseOperator;
+import azkaban.db.EncodingType;
 import azkaban.db.SQLTransaction;
 import azkaban.utils.GZIPUtils;
 import azkaban.utils.JSONUtils;
@@ -32,6 +32,7 @@ import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import org.apache.commons.dbutils.ResultSetHandler;
+import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 
 @Singleton
@@ -45,13 +46,22 @@ public class ExecutionFlowDao {
     this.dbOperator = dbOperator;
   }
 
-  public synchronized void uploadExecutableFlow(final ExecutableFlow flow)
+  public void uploadExecutableFlow(final ExecutableFlow flow)
       throws ExecutorManagerException {
+
+    final String useExecutorParam =
+        flow.getExecutionOptions().getFlowParameters().get(ExecutionOptions.USE_EXECUTOR);
+    final String executorId = StringUtils.isNotEmpty(useExecutorParam) ? useExecutorParam : null;
+
+    final String flowPriorityParam =
+        flow.getExecutionOptions().getFlowParameters().get(ExecutionOptions.FLOW_PRIORITY);
+    final int flowPriority = StringUtils.isNotEmpty(flowPriorityParam) ?
+        Integer.parseInt(flowPriorityParam) : ExecutionOptions.DEFAULT_FLOW_PRIORITY;
+
     final String INSERT_EXECUTABLE_FLOW = "INSERT INTO execution_flows "
-        + "(project_id, flow_id, version, status, submit_time, submit_user, update_time) "
-        + "values (?,?,?,?,?,?,?)";
-    final long submitTime = System.currentTimeMillis();
-    flow.setStatus(Status.PREPARING);
+        + "(project_id, flow_id, version, status, submit_time, submit_user, update_time, "
+        + "use_executor, flow_priority) values (?,?,?,?,?,?,?,?,?)";
+    final long submitTime = flow.getSubmitTime();
 
     /**
      * Why we need a transaction to get last insert ID?
@@ -61,8 +71,8 @@ public class ExecutionFlowDao {
      */
     final SQLTransaction<Long> insertAndGetLastID = transOperator -> {
       transOperator.update(INSERT_EXECUTABLE_FLOW, flow.getProjectId(),
-          flow.getFlowId(), flow.getVersion(), Status.PREPARING.getNumVal(),
-          submitTime, flow.getSubmitUser(), submitTime);
+          flow.getFlowId(), flow.getVersion(), flow.getStatus().getNumVal(),
+          submitTime, flow.getSubmitUser(), submitTime, executorId, flowPriority);
       transOperator.getConnection().commit();
       return transOperator.getLastInsertId();
     };
@@ -108,9 +118,24 @@ public class ExecutionFlowDao {
     }
   }
 
+  /**
+   * fetch flow execution history with specified {@code projectId}, {@code flowId} and flow start
+   * time >= {@code startTime}
+   *
+   * @return the list of flows meeting the specified criteria
+   */
+  public List<ExecutableFlow> fetchFlowHistory(final int projectId, final String flowId, final
+  long startTime) throws ExecutorManagerException {
+    try {
+      return this.dbOperator.query(FetchExecutableFlows.FETCH_EXECUTABLE_FLOW_BY_START_TIME,
+          new FetchExecutableFlows(), projectId, flowId, startTime);
+    } catch (final SQLException e) {
+      throw new ExecutorManagerException("Error fetching historic flows", e);
+    }
+  }
+
   List<ExecutableFlow> fetchFlowHistory(final int projectId, final String flowId,
-      final int skip, final int num,
-      final Status status)
+      final int skip, final int num, final Status status)
       throws ExecutorManagerException {
     try {
       return this.dbOperator.query(FetchExecutableFlows.FETCH_EXECUTABLE_FLOW_BY_STATUS,
@@ -142,7 +167,7 @@ public class ExecutionFlowDao {
 
     boolean first = true;
     if (projContain != null && !projContain.isEmpty()) {
-      query += " ef JOIN projects p ON ef.project_id = p.id WHERE name LIKE ?";
+      query += " JOIN projects p ON ef.project_id = p.id WHERE name LIKE ?";
       params.add('%' + projContain + '%');
       first = false;
     }
@@ -264,11 +289,89 @@ public class ExecutionFlowDao {
     }
   }
 
+  /**
+   * set executor id to null for the execution id
+   */
+  public void unsetExecutorIdForExecution(final int executionId) throws ExecutorManagerException {
+    final String UNSET_EXECUTOR = "UPDATE execution_flows SET executor_id = null where exec_id = ?";
+
+    final SQLTransaction<Integer> unsetExecutor =
+        transOperator -> transOperator.update(UNSET_EXECUTOR, executionId);
+
+    try {
+      this.dbOperator.transaction(unsetExecutor);
+    } catch (final SQLException e) {
+      throw new ExecutorManagerException("Error unsetting executor id for execution " + executionId,
+          e);
+    }
+  }
+
+  public int selectAndUpdateExecution(final int executorId, final boolean isActive)
+      throws ExecutorManagerException {
+    final String UPDATE_EXECUTION = "UPDATE execution_flows SET executor_id = ? where exec_id = ?";
+    final String selectExecutionForUpdate = isActive ?
+        SelectFromExecutionFlows.SELECT_EXECUTION_FOR_UPDATE_ACTIVE :
+        SelectFromExecutionFlows.SELECT_EXECUTION_FOR_UPDATE_INACTIVE;
+
+    final SQLTransaction<Integer> selectAndUpdateExecution = transOperator -> {
+      final List<Integer> execIds = transOperator.query(selectExecutionForUpdate,
+          new SelectFromExecutionFlows(), executorId);
+
+      int execId = -1;
+      if (!execIds.isEmpty()) {
+        execId = execIds.get(0);
+        transOperator.update(UPDATE_EXECUTION, executorId, execId);
+      }
+      transOperator.getConnection().commit();
+      return execId;
+    };
+
+    try {
+      return this.dbOperator.transaction(selectAndUpdateExecution);
+    } catch (final SQLException e) {
+      throw new ExecutorManagerException("Error selecting and updating execution with executor "
+          + executorId, e);
+    }
+  }
+
+  public static class SelectFromExecutionFlows implements
+      ResultSetHandler<List<Integer>> {
+
+    private static final String SELECT_EXECUTION_FOR_UPDATE_FORMAT =
+        "SELECT exec_id from execution_flows WHERE status = " + Status.PREPARING.getNumVal()
+            + " and executor_id is NULL and flow_data is NOT NULL and %s"
+            + " ORDER BY flow_priority DESC, submit_time ASC, exec_id ASC LIMIT 1 FOR UPDATE";
+
+    public static final String SELECT_EXECUTION_FOR_UPDATE_ACTIVE =
+        String.format(SELECT_EXECUTION_FOR_UPDATE_FORMAT,
+            "(use_executor is NULL or use_executor = ?)");
+
+    public static final String SELECT_EXECUTION_FOR_UPDATE_INACTIVE =
+        String.format(SELECT_EXECUTION_FOR_UPDATE_FORMAT, "use_executor = ?");
+
+    @Override
+    public List<Integer> handle(final ResultSet rs) throws SQLException {
+      if (!rs.next()) {
+        return Collections.emptyList();
+      }
+      final List<Integer> execIds = new ArrayList<>();
+      do {
+        final int execId = rs.getInt(1);
+        execIds.add(execId);
+      } while (rs.next());
+
+      return execIds;
+    }
+  }
+
   public static class FetchExecutableFlows implements
       ResultSetHandler<List<ExecutableFlow>> {
 
+    static String FETCH_EXECUTABLE_FLOW_BY_START_TIME =
+        "SELECT ef.exec_id, ef.enc_type, ef.flow_data FROM execution_flows ef WHERE project_id=? "
+            + "AND flow_id=? AND start_time >= ? ORDER BY start_time DESC";
     static String FETCH_BASE_EXECUTABLE_FLOW_QUERY =
-        "SELECT exec_id, enc_type, flow_data FROM execution_flows ";
+        "SELECT ef.exec_id, ef.enc_type, ef.flow_data FROM execution_flows ef";
     static String FETCH_EXECUTABLE_FLOW =
         "SELECT exec_id, enc_type, flow_data FROM execution_flows "
             + "WHERE exec_id=?";
@@ -340,7 +443,7 @@ public class ExecutionFlowDao {
         final byte[] data = rs.getBytes(3);
 
         if (data == null) {
-          logger.error("Found a flow with empty data blob exec_id: " + id);
+          ExecutionFlowDao.logger.error("Found a flow with empty data blob exec_id: " + id);
         } else {
           final EncodingType encType = EncodingType.fromInteger(encodingType);
           try {

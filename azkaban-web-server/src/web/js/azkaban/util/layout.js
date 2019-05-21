@@ -212,22 +212,28 @@ function layoutGraph(nodes, edges, hmargin) {
       var destX = nodeMap[dest].x;
 
       var guides = [];
+      var pointArray = new Array();
+      pointArray.push([nodeMap[src].x, nodeMap[src].y]);
       var dummies = edgeDummies[edgeId];
       for (var j = 0; j < dummies.length; ++j) {
         var point = {x: dummies[j].x, y: dummies[j].y};
         guides.push(point);
+        pointArray.push([point.x, point.y]);
 
         var nextX = j == dummies.length - 1 ? destX : dummies[j + 1].x;
         if (point.x != prevX && point.x != nextX) {
           // Add gap
           if ((point.x > prevX) == (point.x > nextX)) {
             guides.push({x: point.x, y: point.y + cornerGap});
+            pointArray.push([point.x, point.y + cornerGap]);
           }
         }
         prevX = point.x;
       }
 
+      pointArray.push([nodeMap[dest].x, nodeMap[dest].y]);
       edge.guides = guides;
+      edge.oldpoints = pointArray;
     }
     else {
       edge.guides = null;
@@ -386,7 +392,7 @@ function findAverage(nodes) {
   for (var i = 0; i < nodes.length; ++i) {
     sum += nodes[i].x;
   }
-  return sum / nodes.length;
+  return nodes.length != 0 ? sum / nodes.length : 0;
 }
 
 function uncrossWithOut(layer) {

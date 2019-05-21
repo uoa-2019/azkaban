@@ -17,8 +17,8 @@
 package azkaban.execapp;
 
 import azkaban.Constants;
+import azkaban.Constants.JobProperties;
 import azkaban.event.Event;
-import azkaban.event.Event.Type;
 import azkaban.event.EventData;
 import azkaban.event.EventHandler;
 import azkaban.execapp.event.BlockingStatus;
@@ -34,6 +34,7 @@ import azkaban.jobExecutor.JavaProcessJob;
 import azkaban.jobExecutor.Job;
 import azkaban.jobtype.JobTypeManager;
 import azkaban.jobtype.JobTypeManagerException;
+import azkaban.spi.EventType;
 import azkaban.utils.ExternalLinkUtils;
 import azkaban.utils.PatternLayoutEscaped;
 import azkaban.utils.Props;
@@ -62,8 +63,10 @@ public class JobRunner extends EventHandler implements Runnable {
 
   private static final Logger serverLogger = Logger.getLogger(JobRunner.class);
   private static final Object logCreatorLock = new Object();
-  private final Layout DEFAULT_LAYOUT = new EnhancedPatternLayout(
-      "%d{dd-MM-yyyy HH:mm:ss z} %c{1} %p - %m\n");
+
+  private static final String DEFAULT_LAYOUT =
+      "%d{dd-MM-yyyy HH:mm:ss z} %c{1} %p - %m\n";
+
   private final Object syncObject = new Object();
   private final JobTypeManager jobtypeManager;
   private final ExecutorLoader loader;
@@ -71,7 +74,7 @@ public class JobRunner extends EventHandler implements Runnable {
   private final Props azkabanProps;
   private final ExecutableNode node;
   private final File workingDir;
-  private final Layout loggerLayout = this.DEFAULT_LAYOUT;
+  private final Layout loggerLayout;
   private final String jobId;
   private final Set<String> pipelineJobs = new HashSet<>();
   private Logger logger = null;
@@ -102,9 +105,14 @@ public class JobRunner extends EventHandler implements Runnable {
 
     this.executionId = node.getParentFlow().getExecutionId();
     this.jobId = node.getId();
+
     this.loader = loader;
     this.jobtypeManager = jobtypeManager;
     this.azkabanProps = azkabanProps;
+    final String jobLogLayout = this.props.getString(
+        JobProperties.JOB_LOG_LAYOUT, DEFAULT_LAYOUT);
+
+    this.loggerLayout = new EnhancedPatternLayout(jobLogLayout);
   }
 
   public static String createLogFileName(final ExecutableNode node, final int attempt) {
@@ -293,7 +301,9 @@ public class JobRunner extends EventHandler implements Runnable {
         .getExternalLogViewer(this.azkabanProps, this.jobId,
             this.props);
     if (!externalViewer.isEmpty()) {
-      this.logger.info("See logs at: " + externalViewer);
+      this.logger.info("If you want to leverage AZ ELK logging support, you need to follow the "
+          + "instructions: http://azkaban.github.io/azkaban/docs/latest/#how-to");
+      this.logger.info("If you did the above step, see logs at: " + externalViewer);
     }
   }
 
@@ -312,6 +322,7 @@ public class JobRunner extends EventHandler implements Runnable {
     final String logName = createLogFileName(this.node);
     this.logFile = new File(this.workingDir, logName);
     final String absolutePath = this.logFile.getAbsolutePath();
+    this.flowLogger.info("Log file path for job: " + this.jobId + " is: " + absolutePath);
 
     // Attempt to create FileAppender
     final RollingFileAppender fileAppender =
@@ -412,12 +423,12 @@ public class JobRunner extends EventHandler implements Runnable {
       if (quickFinish) {
         this.node.setStartTime(time);
         fireEvent(
-            Event.create(this, Type.JOB_STARTED,
+            Event.create(this, EventType.JOB_STARTED,
                 new EventData(nodeStatus, this.node.getNestedId())));
         this.node.setEndTime(time);
         fireEvent(
             Event
-                .create(this, Type.JOB_FINISHED,
+                .create(this, EventType.JOB_FINISHED,
                     new EventData(nodeStatus, this.node.getNestedId())));
         return true;
       }
@@ -580,13 +591,13 @@ public class JobRunner extends EventHandler implements Runnable {
     Status finalStatus = this.node.getStatus();
     uploadExecutableNode();
     if (!errorFound && !isKilled()) {
-      fireEvent(Event.create(this, Type.JOB_STARTED, new EventData(this.node)));
+      fireEvent(Event.create(this, EventType.JOB_STARTED, new EventData(this.node)));
 
       final Status prepareStatus = prepareJob();
       if (prepareStatus != null) {
         // Writes status to the db
         writeStatus();
-        fireEvent(Event.create(this, Type.JOB_STATUS_CHANGED,
+        fireEvent(Event.create(this, EventType.JOB_STATUS_CHANGED,
             new EventData(prepareStatus, this.node.getNestedId())));
         finalStatus = runJob();
       } else {
@@ -609,11 +620,15 @@ public class JobRunner extends EventHandler implements Runnable {
         "Finishing job " + this.jobId + getNodeRetryLog() + " at " + this.node.getEndTime()
             + " with status " + this.node.getStatus());
 
-    fireEvent(Event.create(this, Type.JOB_FINISHED,
-        new EventData(finalStatus, this.node.getNestedId())), false);
-    finalizeLogFile(this.node.getAttempt());
-    finalizeAttachmentFile();
-    writeStatus();
+    try {
+      finalizeLogFile(this.node.getAttempt());
+      finalizeAttachmentFile();
+      writeStatus();
+    } finally {
+      // note that FlowRunner thread does node.attempt++ when it receives the JOB_FINISHED event
+      fireEvent(Event.create(this, EventType.JOB_FINISHED,
+          new EventData(finalStatus, this.node.getNestedId())), false);
+    }
   }
 
   private String getNodeRetryLog() {
@@ -658,6 +673,7 @@ public class JobRunner extends EventHandler implements Runnable {
       this.props.put(CommonJobProperties.JOB_METADATA_FILE,
           createMetaDataFileName(this.node));
       this.props.put(CommonJobProperties.JOB_ATTACHMENT_FILE, this.attachmentFileName);
+      this.props.put(CommonJobProperties.JOB_LOG_FILE, this.logFile.getAbsolutePath());
       finalStatus = changeStatus(Status.RUNNING);
 
       // Ability to specify working directory
@@ -665,13 +681,22 @@ public class JobRunner extends EventHandler implements Runnable {
         this.props.put(AbstractProcessJob.WORKING_DIR, this.workingDir.getAbsolutePath());
       }
 
-      if (this.props.containsKey("user.to.proxy")) {
-        final String jobProxyUser = this.props.getString("user.to.proxy");
+      if (this.props.containsKey(JobProperties.USER_TO_PROXY)) {
+        final String jobProxyUser = this.props.getString(JobProperties.USER_TO_PROXY);
         if (this.proxyUsers != null && !this.proxyUsers.contains(jobProxyUser)) {
+          final String permissionsPageURL = getProjectPermissionsURL();
           this.logger.error("User " + jobProxyUser
-              + " has no permission to execute this job " + this.jobId + "!");
+              + " has no permission to execute this job " + this.jobId + "!"
+              + " If you want to execute this flow as " + jobProxyUser
+              + ", please add it to Proxy Users under project permissions page: " +
+              permissionsPageURL);
           return null;
         }
+      } else {
+        final String submitUser = this.getNode().getExecutableFlow().getSubmitUser();
+        this.props.put(JobProperties.USER_TO_PROXY, submitUser);
+        this.logger.info("user.to.proxy property was not set, defaulting to submit user " +
+            submitUser);
       }
 
       try {
@@ -686,6 +711,20 @@ public class JobRunner extends EventHandler implements Runnable {
   }
 
   /**
+   * Get project permissions page URL
+   */
+  private String getProjectPermissionsURL() {
+    String projectPermissionsURL = null;
+    final String baseURL = this.azkabanProps.get(AZKABAN_WEBSERVER_URL);
+    if (baseURL != null) {
+      final String projectName = this.node.getParentFlow().getProjectName();
+      projectPermissionsURL = String
+          .format("%s/manager?project=%s&permissions", baseURL, projectName);
+    }
+    return projectPermissionsURL;
+  }
+
+  /**
    * Add useful JVM arguments so it is easier to map a running Java process to a flow, execution id
    * and job
    */
@@ -695,7 +734,7 @@ public class JobRunner extends EventHandler implements Runnable {
 
     String jobJVMArgs =
         String.format(
-            "-Dazkaban.flowid=%s -Dazkaban.execid=%s -Dazkaban.jobid=%s",
+            "'-Dazkaban.flowid=%s' '-Dazkaban.execid=%s' '-Dazkaban.jobid=%s'",
             flowName, this.executionId, jobId);
 
     final String previousJVMArgs = this.props.get(JavaProcessJob.JVM_PARAMS);
@@ -719,10 +758,10 @@ public class JobRunner extends EventHandler implements Runnable {
       this.props.put(CommonJobProperties.EXECUTION_LINK,
           String.format("%s/executor?execid=%d", baseURL, this.executionId));
       this.props.put(CommonJobProperties.JOBEXEC_LINK, String.format(
-          "%s/executor?execid=%d&job=%s", baseURL, this.executionId, this.jobId));
+          "%s/executor?execid=%d&job=%s", baseURL, this.executionId, this.node.getNestedId()));
       this.props.put(CommonJobProperties.ATTEMPT_LINK, String.format(
           "%s/executor?execid=%d&job=%s&attempt=%d", baseURL, this.executionId,
-          this.jobId, this.node.getAttempt()));
+          this.node.getNestedId(), this.node.getAttempt()));
       this.props.put(CommonJobProperties.WORKFLOW_LINK, String.format(
           "%s/manager?project=%s&flow=%s", baseURL, projectName, flowName));
       this.props.put(CommonJobProperties.JOB_LINK, String.format(
@@ -743,9 +782,10 @@ public class JobRunner extends EventHandler implements Runnable {
   }
 
   private Status runJob() {
-    Status finalStatus = this.node.getStatus();
+    Status finalStatus;
     try {
       this.job.run();
+      finalStatus = this.node.getStatus();
     } catch (final Throwable e) {
       synchronized (this.syncObject) {
         if (this.props.getBoolean("job.succeed.on.failure", false)) {
@@ -770,7 +810,7 @@ public class JobRunner extends EventHandler implements Runnable {
     }
 
     synchronized (this.syncObject) {
-      // If the job is still running, set the status to Success.
+      // If the job is still running (but not killed), set the status to Success.
       if (!Status.isStatusFinished(finalStatus) && !isKilled()) {
         finalStatus = changeStatus(Status.SUCCEEDED);
       }
@@ -801,8 +841,10 @@ public class JobRunner extends EventHandler implements Runnable {
   }
 
   public void killBySLA() {
-    kill();
-    this.getNode().setKilledBySLA(true);
+    synchronized (this.syncObject) {
+      kill();
+      this.getNode().setKilledBySLA(true);
+    }
   }
 
   public void kill() {
@@ -811,6 +853,7 @@ public class JobRunner extends EventHandler implements Runnable {
         return;
       }
       logError("Kill has been called.");
+      this.changeStatus(Status.KILLING);
       this.killed = true;
 
       final BlockingStatus status = this.currentBlockStatus;
@@ -836,7 +879,6 @@ public class JobRunner extends EventHandler implements Runnable {
             "Failed trying to cancel job. Maybe it hasn't started running yet or just finished.");
       }
 
-      this.changeStatus(Status.KILLED);
     }
   }
 

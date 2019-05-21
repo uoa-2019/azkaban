@@ -15,7 +15,7 @@
  */
 package azkaban.project;
 
-import azkaban.database.EncodingType;
+import azkaban.db.EncodingType;
 import azkaban.flow.Flow;
 import azkaban.user.Permission;
 import azkaban.utils.GZIPUtils;
@@ -39,9 +39,6 @@ import org.apache.commons.dbutils.ResultSetHandler;
 class JdbcProjectHandlerSet {
 
   public static class ProjectResultHandler implements ResultSetHandler<List<Project>> {
-
-    public static String SELECT_PROJECT_BY_NAME =
-        "SELECT id, name, active, modified_time, create_time, version, last_modified_by, description, enc_type, settings_blob FROM projects WHERE name=?";
 
     public static String SELECT_PROJECT_BY_ID =
         "SELECT id, name, active, modified_time, create_time, version, last_modified_by, description, enc_type, settings_blob FROM projects WHERE id=?";
@@ -323,6 +320,8 @@ class JdbcProjectHandlerSet {
   public static class IntHandler implements ResultSetHandler<Integer> {
 
     public static String SELECT_LATEST_VERSION = "SELECT MAX(version) FROM project_versions WHERE project_id=?";
+    public static String SELECT_LATEST_FLOW_VERSION = "SELECT MAX(flow_version) FROM "
+        + "project_flow_files WHERE project_id=? AND project_version=? AND flow_name=?";
 
     @Override
     public Integer handle(final ResultSet rs) throws SQLException {
@@ -331,6 +330,32 @@ class JdbcProjectHandlerSet {
       }
 
       return rs.getInt(1);
+    }
+  }
+
+  public static class FlowFileResultHandler implements ResultSetHandler<List<byte[]>> {
+
+    public static String SELECT_FLOW_FILE =
+        "SELECT flow_file FROM project_flow_files WHERE "
+            + "project_id=? AND project_version=? AND flow_name=? AND flow_version=?";
+
+    public static String SELECT_ALL_FLOW_FILES =
+        "SELECT flow_file FROM project_flow_files WHERE "
+            + "project_id=? AND project_version=?";
+
+    @Override
+    public List<byte[]> handle(final ResultSet rs) throws SQLException {
+      if (!rs.next()) {
+        return Collections.emptyList();
+      }
+
+      final List<byte[]> data = new ArrayList<>();
+      do {
+        final byte[] bytes = rs.getBytes(1);
+        data.add(bytes);
+      } while (rs.next());
+
+      return data;
     }
   }
 }
