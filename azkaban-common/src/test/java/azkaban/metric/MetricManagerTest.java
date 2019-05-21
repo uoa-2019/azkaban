@@ -10,9 +10,6 @@ import azkaban.metric.inmemoryemitter.InMemoryMetricEmitter;
 import azkaban.utils.Props;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import org.joda.time.DateTime;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -24,7 +21,6 @@ public class MetricManagerTest {
   MetricReportManager manager;
   FakeMetric metric;
   InMemoryMetricEmitter emitter;
-  MetricEmitterWrapper emitterWrapper;
 
   @Before
   public void setUp() throws Exception {
@@ -32,8 +28,7 @@ public class MetricManagerTest {
     this.metric = new FakeMetric(this.manager);
     this.manager.addMetric(this.metric);
     this.emitter = new InMemoryMetricEmitter(new Props());
-    this.emitterWrapper = new MetricEmitterWrapper();
-    this.manager.addMetricEmitter(this.emitterWrapper);
+    this.manager.addMetricEmitter(this.emitter);
   }
 
   /**
@@ -65,14 +60,13 @@ public class MetricManagerTest {
    */
   @Test
   public void managerEmitterMaintenanceTest() {
-    assertTrue("Failed to add Emitter",
-        this.manager.getMetricEmitters().contains(this.emitterWrapper));
+    assertTrue("Failed to add Emitter", this.manager.getMetricEmitters().contains(this.emitter));
 
     final int originalSize = this.manager.getMetricEmitters().size();
-    this.manager.removeMetricEmitter(this.emitterWrapper);
+    this.manager.removeMetricEmitter(this.emitter);
     assertEquals("Failed to remove emitter", this.manager.getMetricEmitters().size(),
         originalSize - 1);
-    this.manager.addMetricEmitter(this.emitterWrapper);
+    this.manager.addMetricEmitter(this.emitter);
   }
 
   /**
@@ -80,37 +74,16 @@ public class MetricManagerTest {
    */
   @Test
   public void managerEmitterHandlingTest() throws Exception {
-
-    // metrics use System.currentTimeMillis, so that method should be the millis provider
-    final DateTime aboutNow = new DateTime(System.currentTimeMillis());
-
     this.emitter.purgeAllData();
-
-    final Date from = aboutNow.minusMinutes(1).toDate();
+    final Date from = new Date();
     this.metric.notifyManager();
 
-    this.emitterWrapper.countDownLatch.await(10L, TimeUnit.SECONDS);
+    Thread.sleep(2000);
 
-    final Date to = aboutNow.plusMinutes(1).toDate();
-    final List<InMemoryHistoryNode> nodes = this.emitter.getMetrics("FakeMetric", from, to, false);
+    final List<InMemoryHistoryNode> nodes = this.emitter
+        .getMetrics("FakeMetric", from, new Date(), false);
 
     assertEquals("Failed to report metric", 1, nodes.size());
     assertEquals("Failed to report metric", nodes.get(0).getValue(), 4);
-  }
-
-  private class MetricEmitterWrapper implements IMetricEmitter {
-
-    private final CountDownLatch countDownLatch = new CountDownLatch(1);
-
-    @Override
-    public void reportMetric(final IMetric<?> metric) throws MetricException {
-      MetricManagerTest.this.emitter.reportMetric(metric);
-      this.countDownLatch.countDown();
-    }
-
-    @Override
-    public void purgeAllData() throws MetricException {
-      MetricManagerTest.this.emitter.purgeAllData();
-    }
   }
 }

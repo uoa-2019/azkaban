@@ -16,9 +16,6 @@
 
 package azkaban.executor;
 
-import java.util.Optional;
-import javax.annotation.Nullable;
-
 public class ExecutionReference {
 
   private final int execId;
@@ -33,7 +30,11 @@ public class ExecutionReference {
     this.execId = execId;
   }
 
-  public ExecutionReference(final int execId, @Nullable final Executor executor) {
+  public ExecutionReference(final int execId, final Executor executor) {
+    if (executor == null) {
+      throw new IllegalArgumentException(String.format(
+          "Executor cannot be null for exec id: %d ExecutionReference", execId));
+    }
     this.execId = execId;
     this.executor = executor;
   }
@@ -58,6 +59,14 @@ public class ExecutionReference {
     return this.execId;
   }
 
+  public String getHost() {
+    return this.executor.getHost();
+  }
+
+  public int getPort() {
+    return this.executor.getPort();
+  }
+
   public int getNumErrors() {
     return this.numErrors;
   }
@@ -66,11 +75,11 @@ public class ExecutionReference {
     this.numErrors = numErrors;
   }
 
-  public Optional<Executor> getExecutor() {
-    return Optional.ofNullable(this.executor);
+  public Executor getExecutor() {
+    return this.executor;
   }
 
-  public void setExecutor(final @Nullable Executor executor) {
+  public void setExecutor(final Executor executor) {
     this.executor = executor;
   }
 }

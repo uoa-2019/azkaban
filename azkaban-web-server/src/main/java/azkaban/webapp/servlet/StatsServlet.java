@@ -18,7 +18,7 @@ package azkaban.webapp.servlet;
 
 import azkaban.executor.ConnectorParams;
 import azkaban.executor.Executor;
-import azkaban.executor.ExecutorManagerAdapter;
+import azkaban.executor.ExecutorManager;
 import azkaban.executor.ExecutorManagerException;
 import azkaban.server.session.Session;
 import azkaban.user.User;
@@ -47,14 +47,14 @@ public class StatsServlet extends LoginAbstractAzkabanServlet {
 
   private static final long serialVersionUID = 1L;
   private UserManager userManager;
-  private ExecutorManagerAdapter execManagerAdapter;
+  private ExecutorManager execManager;
 
   @Override
   public void init(final ServletConfig config) throws ServletException {
     super.init(config);
     final AzkabanWebServer server = (AzkabanWebServer) getApplication();
     this.userManager = server.getUserManager();
-    this.execManagerAdapter = server.getExecutorManager();
+    this.execManager = server.getExecutorManager();
   }
 
   @Override
@@ -108,7 +108,7 @@ public class StatsServlet extends LoginAbstractAzkabanServlet {
     final Map<String, Object> result;
     try {
       result =
-          this.execManagerAdapter.callExecutorStats(executorId,
+          this.execManager.callExecutorStats(executorId,
               ConnectorParams.STATS_GET_ALLMETRICSNAME,
               (Pair<String, String>[]) null);
 
@@ -134,7 +134,7 @@ public class StatsServlet extends LoginAbstractAzkabanServlet {
       throws ServletException, IOException {
     try {
       final Map<String, Object> result =
-          this.execManagerAdapter
+          this.execManager
               .callExecutorStats(executorId, actionName, getAllParams(req));
       if (result.containsKey(ConnectorParams.RESPONSE_ERROR)) {
         ret.put(ConnectorParams.RESPONSE_ERROR,
@@ -157,7 +157,7 @@ public class StatsServlet extends LoginAbstractAzkabanServlet {
       ServletException {
     try {
       final Map<String, Object> result =
-          this.execManagerAdapter.callExecutorStats(executorId,
+          this.execManager.callExecutorStats(executorId,
               ConnectorParams.STATS_GET_METRICHISTORY, getAllParams(req));
       if (result.containsKey(ConnectorParams.RESPONSE_ERROR)) {
         ret.put(ConnectorParams.RESPONSE_ERROR,
@@ -181,15 +181,11 @@ public class StatsServlet extends LoginAbstractAzkabanServlet {
     final Page page = newPage(req, resp, session, "azkaban/webapp/servlet/velocity/statsPage.vm");
 
     try {
-      final Collection<Executor> executors = this.execManagerAdapter.getAllActiveExecutors();
+      final Collection<Executor> executors = this.execManager.getAllActiveExecutors();
       page.add("executorList", executors);
 
-      if (executors.isEmpty()) {
-        throw new ExecutorManagerException("Executor list is empty.");
-      }
-
       final Map<String, Object> result =
-          this.execManagerAdapter.callExecutorStats(executors.iterator().next().getId(),
+          this.execManager.callExecutorStats(executors.iterator().next().getId(),
               ConnectorParams.STATS_GET_ALLMETRICSNAME,
               (Pair<String, String>[]) null);
       if (result.containsKey(ConnectorParams.RESPONSE_ERROR)) {

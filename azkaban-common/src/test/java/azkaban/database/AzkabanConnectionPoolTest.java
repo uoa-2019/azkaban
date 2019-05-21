@@ -78,7 +78,7 @@ public class AzkabanConnectionPoolTest {
 
     public EmbeddedH2BasicDataSource() {
       super();
-      final String url = "jdbc:h2:mem:test;IGNORECASE=TRUE";
+      final String url = "jdbc:h2:mem:test";
       setDriverClassName("org.h2.Driver");
       setUrl(url);
     }

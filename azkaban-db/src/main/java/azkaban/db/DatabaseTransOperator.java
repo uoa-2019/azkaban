@@ -18,10 +18,7 @@ package azkaban.db;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
-import org.apache.commons.dbutils.handlers.ScalarHandler;
-import org.apache.log4j.Logger;
 
 
 /**
@@ -36,16 +33,7 @@ import org.apache.log4j.Logger;
  *
  * @see org.apache.commons.dbutils.QueryRunner
  */
-public class DatabaseTransOperator {
-
-  private static final Logger logger = Logger.getLogger(DatabaseTransOperator.class);
-  private final Connection conn;
-  private final QueryRunner queryRunner;
-
-  public DatabaseTransOperator(final QueryRunner queryRunner, final Connection conn) {
-    this.conn = conn;
-    this.queryRunner = queryRunner;
-  }
+public interface DatabaseTransOperator {
 
   /**
    * returns the last id from a previous insert statement. Note that last insert and this operation
@@ -53,19 +41,7 @@ public class DatabaseTransOperator {
    *
    * @return the last inserted id in mysql per connection.
    */
-  public long getLastInsertId() throws SQLException {
-    // A default connection: autocommit = true.
-    long num = -1;
-    try {
-      num = ((Number) this.queryRunner
-          .query(this.conn, "SELECT LAST_INSERT_ID();", new ScalarHandler<>(1)))
-          .longValue();
-    } catch (final SQLException ex) {
-      logger.error("can not get last insertion ID");
-      throw ex;
-    }
-    return num;
-  }
+  long getLastInsertId() throws SQLException;
 
   /**
    *
@@ -76,18 +52,8 @@ public class DatabaseTransOperator {
    * @return
    * @throws SQLException
    */
-  public <T> T query(final String querySql, final ResultSetHandler<T> resultHandler,
-      final Object... params)
-      throws SQLException {
-    try {
-      return this.queryRunner.query(this.conn, querySql, resultHandler, params);
-    } catch (final SQLException ex) {
-      //RETRY Logic should be implemented here if needed.
-      throw ex;
-    } finally {
-      // Note: CAN NOT CLOSE CONNECTION HERE.
-    }
-  }
+  <T> T query(String querySql, ResultSetHandler<T> resultHandler, Object... params)
+      throws SQLException;
 
   /**
    *
@@ -96,21 +62,10 @@ public class DatabaseTransOperator {
    * @return
    * @throws SQLException
    */
-  public int update(final String updateClause, final Object... params) throws SQLException {
-    try {
-      return this.queryRunner.update(this.conn, updateClause, params);
-    } catch (final SQLException ex) {
-      //RETRY Logic should be implemented here if needed.
-      throw ex;
-    } finally {
-      // Note: CAN NOT CLOSE CONNECTION HERE.
-    }
-  }
+  int update(String updateClause, Object... params) throws SQLException;
 
   /**
    * @return the JDBC connection associated with this operator.
    */
-  public Connection getConnection() {
-    return this.conn;
-  }
+  Connection getConnection();
 }

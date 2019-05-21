@@ -13,6 +13,7 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 package azkaban.execapp.event;
 
 import azkaban.executor.ExecutableFlow;
@@ -23,10 +24,9 @@ import azkaban.executor.Status;
 import java.util.ArrayList;
 import java.util.Map;
 
-
 public class RemoteFlowWatcher extends FlowWatcher {
 
-  private final static long CHECK_INTERVAL_MS = 60000; // 60 * 1000
+  private final static long CHECK_INTERVAL_MS = 60 * 1000;
 
   private int execId;
   private ExecutorLoader loader;

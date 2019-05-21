@@ -16,8 +16,8 @@
 
 package azkaban.jobExecutor;
 
+import azkaban.project.DirectoryFlowLoader;
 import azkaban.server.AzkabanServer;
-import azkaban.utils.MemConfValue;
 import azkaban.utils.Pair;
 import azkaban.utils.Props;
 import azkaban.utils.Utils;
@@ -59,7 +59,7 @@ public class JavaProcessJob extends ProcessJob {
     command += getJVMArguments() + " ";
     command += "-Xms" + getInitialMemorySize() + " ";
     command += "-Xmx" + getMaxMemorySize() + " ";
-    command += getClassPathParam();
+    command += "-cp " + createArguments(getClassPaths(), ":") + " ";
     command += getJavaClass() + " ";
     command += getMainArguments();
 
@@ -73,8 +73,7 @@ public class JavaProcessJob extends ProcessJob {
   protected String getClassPathParam() {
     final List<String> classPath = getClassPaths();
     if (classPath == null || classPath.size() == 0) {
-      throw new IllegalArgumentException(
-          "No classpath defined and no .jar files found in job directory. Can't run java command.");
+      return "";
     }
 
     return "-cp " + createArguments(classPath, ":") + " ";
@@ -95,14 +94,16 @@ public class JavaProcessJob extends ProcessJob {
       }
     }
 
-    if (classPaths == null || classPaths.isEmpty()) {
+    if (classPaths == null) {
       final File path = new File(getPath());
+      // File parent = path.getParentFile();
       getLog().info(
           "No classpath specified. Trying to load classes from " + path);
 
       if (path != null) {
         for (final File file : path.listFiles()) {
           if (file.getName().endsWith(".jar")) {
+            // log.info("Adding to classpath:" + file.getName());
             classpathList.add(file.getName());
           }
         }
@@ -159,19 +160,23 @@ public class JavaProcessJob extends ProcessJob {
 
     final Props azkabanProperties = AzkabanServer.getAzkabanProperties();
     if (azkabanProperties != null) {
-      final MemConfValue maxXms = MemConfValue.parseMaxXms(azkabanProperties);
-      final MemConfValue maxXmx = MemConfValue.parseMaxXmx(azkabanProperties);
+      final String maxXms = azkabanProperties
+          .getString(DirectoryFlowLoader.JOB_MAX_XMS, DirectoryFlowLoader.MAX_XMS_DEFAULT);
+      final String maxXmx = azkabanProperties
+          .getString(DirectoryFlowLoader.JOB_MAX_XMX, DirectoryFlowLoader.MAX_XMX_DEFAULT);
+      final long sizeMaxXms = Utils.parseMemString(maxXms);
+      final long sizeMaxXmx = Utils.parseMemString(maxXmx);
 
-      if (xms > maxXms.getSize()) {
+      if (xms > sizeMaxXms) {
         throw new Exception(
             String.format("%s: Xms value has exceeded the allowed limit (max Xms = %s)",
-                getId(), maxXms.getString()));
+                getId(), maxXms));
       }
 
-      if (xmx > maxXmx.getSize()) {
+      if (xmx > sizeMaxXmx) {
         throw new Exception(
             String.format("%s: Xmx value has exceeded the allowed limit (max Xmx = %s)",
-                getId(), maxXmx.getString()));
+                getId(), maxXmx));
       }
     }
 

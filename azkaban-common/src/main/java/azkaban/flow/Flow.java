@@ -16,7 +16,6 @@
 
 package azkaban.flow;
 
-import azkaban.Constants;
 import azkaban.executor.mail.DefaultMailCreator;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -48,10 +47,6 @@ public class Flow {
   private Map<String, Object> metadata = new HashMap<>();
 
   private boolean isLayedOut = false;
-  private boolean isEmbeddedFlow = false;
-  private double azkabanFlowVersion = Constants.DEFAULT_AZKABAN_FLOW_VERSION;
-  private String condition = null;
-  private boolean isLocked = false;
 
   public Flow(final String id) {
     this.id = id;
@@ -62,32 +57,10 @@ public class Flow {
 
     final String id = (String) flowObject.get("id");
     final Boolean layedout = (Boolean) flowObject.get("layedout");
-    final Boolean isEmbeddedFlow = (Boolean) flowObject.get("embeddedFlow");
-    final Double azkabanFlowVersion = (Double) flowObject.get("azkabanFlowVersion");
-    final String condition = (String) flowObject.get("condition");
-    final Boolean isLocked = (Boolean) flowObject.get("isLocked");
-
     final Flow flow = new Flow(id);
     if (layedout != null) {
       flow.setLayedOut(layedout);
     }
-
-    if (isEmbeddedFlow != null) {
-      flow.setEmbeddedFlow(isEmbeddedFlow);
-    }
-
-    if (azkabanFlowVersion != null) {
-      flow.setAzkabanFlowVersion(azkabanFlowVersion);
-    }
-
-    if (condition != null) {
-      flow.setCondition(condition);
-    }
-
-    if (isLocked != null) {
-      flow.setLocked(isLocked);
-    }
-
     final int projId = (Integer) flowObject.get("project.id");
     flow.setProjectId(projId);
 
@@ -184,31 +157,28 @@ public class Flow {
         }
       }
 
-      setLevelsAndEdgeNodes(new HashSet<>(this.startNodes), 0);
+      for (final Node node : this.startNodes) {
+        node.setLevel(0);
+        this.numLevels = 0;
+        recursiveSetLevels(node);
+      }
     }
   }
 
-  private void setLevelsAndEdgeNodes(final Set<Node> levelNodes, final int level) {
-    final Set<Node> nextLevelNodes = new HashSet<>();
+  private void recursiveSetLevels(final Node node) {
+    final Set<Edge> edges = this.outEdges.get(node.getId());
+    if (edges != null) {
+      for (final Edge edge : edges) {
+        final Node nextNode = this.nodes.get(edge.getTargetId());
+        edge.setSource(node);
+        edge.setTarget(nextNode);
 
-    for (final Node node : levelNodes) {
-      node.setLevel(level);
-
-      final Set<Edge> edges = this.outEdges.get(node.getId());
-      if (edges != null) {
-        edges.forEach(edge -> {
-          edge.setSource(node);
-          edge.setTarget(this.nodes.get(edge.getTargetId()));
-
-          nextLevelNodes.add(edge.getTarget());
-        });
+        // We pick whichever is higher to get the max distance from root.
+        final int level = Math.max(node.getLevel() + 1, nextNode.getLevel());
+        nextNode.setLevel(level);
+        this.numLevels = Math.max(level, this.numLevels);
+        recursiveSetLevels(nextNode);
       }
-    }
-
-    this.numLevels = level;
-
-    if (!nextLevelNodes.isEmpty()) {
-      setLevelsAndEdgeNodes(nextLevelNodes, level + 1);
     }
   }
 
@@ -350,11 +320,6 @@ public class Flow {
     flowObj.put("success.email", this.successEmail);
     flowObj.put("mailCreator", this.mailCreator);
     flowObj.put("layedout", this.isLayedOut);
-    flowObj.put("embeddedFlow", this.isEmbeddedFlow);
-    flowObj.put("azkabanFlowVersion", this.azkabanFlowVersion);
-    flowObj.put("condition", this.condition);
-    flowObj.put("isLocked", this.isLocked);
-
     if (this.errors != null) {
       flowObj.put("errors", this.errors);
     }
@@ -404,30 +369,6 @@ public class Flow {
     this.isLayedOut = layedOut;
   }
 
-  public boolean isEmbeddedFlow() {
-    return this.isEmbeddedFlow;
-  }
-
-  public void setEmbeddedFlow(final boolean embeddedFlow) {
-    this.isEmbeddedFlow = embeddedFlow;
-  }
-
-  public double getAzkabanFlowVersion() {
-    return this.azkabanFlowVersion;
-  }
-
-  public void setAzkabanFlowVersion(final double azkabanFlowVersion) {
-    this.azkabanFlowVersion = azkabanFlowVersion;
-  }
-
-  public String getCondition() {
-    return this.condition;
-  }
-
-  public void setCondition(final String condition) {
-    this.condition = condition;
-  }
-
   public Map<String, Object> getMetadata() {
     if (this.metadata == null) {
       this.metadata = new HashMap<>();
@@ -466,8 +407,4 @@ public class Flow {
   public void setProjectId(final int projectId) {
     this.projectId = projectId;
   }
-
-  public boolean isLocked() { return this.isLocked; }
-
-  public void setLocked(boolean locked) { this.isLocked = locked; }
 }

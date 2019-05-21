@@ -20,6 +20,9 @@ import azkaban.jobExecutor.JavaProcessJob;
 import azkaban.jobExecutor.Job;
 import azkaban.jobExecutor.NoopJob;
 import azkaban.jobExecutor.ProcessJob;
+import azkaban.jobExecutor.PythonJob;
+import azkaban.jobExecutor.RubyJob;
+import azkaban.jobExecutor.ScriptJob;
 import azkaban.jobExecutor.utils.JobExecutionException;
 import azkaban.utils.Props;
 import azkaban.utils.PropsUtils;
@@ -90,6 +93,9 @@ public class JobTypeManager {
     plugins.addPluginClass("command", ProcessJob.class);
     plugins.addPluginClass("javaprocess", JavaProcessJob.class);
     plugins.addPluginClass("noop", NoopJob.class);
+    plugins.addPluginClass("python", PythonJob.class);
+    plugins.addPluginClass("ruby", RubyJob.class);
+    plugins.addPluginClass("script", ScriptJob.class);
   }
 
   // load Job Types from jobtype plugin dir
@@ -123,8 +129,8 @@ public class JobTypeManager {
       }
     } else {
       logger.info("Common plugin job props file " + commonJobPropsFile
-          + " not found. Using only globals props");
-      commonPluginJobProps = new Props(this.globalProperties);
+          + " not found. Using empty props.");
+      commonPluginJobProps = new Props();
     }
 
     // Loads the common properties used by all plugins when loading
@@ -191,10 +197,6 @@ public class JobTypeManager {
 
       pluginLoadProps = new Props(commonPluginLoadProps, pluginLoadPropsFile);
       pluginLoadProps.put("plugin.dir", pluginDir.getAbsolutePath());
-
-      // Adding "plugin.dir" to allow plugin.properties file could read this property. Also, user
-      // code could leverage this property as well.
-      pluginJobProps.put("plugin.dir", pluginDir.getAbsolutePath());
       pluginLoadProps = PropsUtils.resolveProps(pluginLoadProps);
     } catch (final Exception e) {
       logger.error("pluginLoadProps to help with debugging: " + pluginLoadProps);

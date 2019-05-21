@@ -16,8 +16,6 @@
 
 package azkaban.webapp.servlet;
 
-import azkaban.Constants;
-import azkaban.Constants.ConfigurationKeys;
 import azkaban.executor.ExecutableFlow;
 import azkaban.executor.ExecutableJobInfo;
 import azkaban.executor.ExecutorManagerAdapter;
@@ -27,11 +25,9 @@ import azkaban.flow.Edge;
 import azkaban.flow.Flow;
 import azkaban.flow.FlowProps;
 import azkaban.flow.Node;
-import azkaban.flowtrigger.quartz.FlowTriggerScheduler;
 import azkaban.project.Project;
 import azkaban.project.ProjectFileHandler;
 import azkaban.project.ProjectLogEvent;
-import azkaban.project.ProjectLogEvent.EventType;
 import azkaban.project.ProjectManager;
 import azkaban.project.ProjectManagerException;
 import azkaban.project.ProjectWhitelist;
@@ -71,30 +67,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.function.Consumer;
-import java.util.stream.Collectors;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
-import org.quartz.SchedulerException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.log4j.Logger;
 
 public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
-  static final String FLOW_IS_LOCKED_PARAM = "isLocked";
-  static final String FLOW_NAME_PARAM = "flowName";
-  static final String FLOW_ID_PARAM = "flowId";
-  static final String ERROR_PARAM = "error";
   private static final String APPLICATION_ZIP_MIME_TYPE = "application/zip";
   private static final long serialVersionUID = 1;
-  private static final Logger logger = LoggerFactory.getLogger(ProjectManagerServlet.class);
+  private static final Logger logger = Logger
+      .getLogger(ProjectManagerServlet.class);
   private static final NodeLevelComparator NODE_LEVEL_COMPARATOR =
       new NodeLevelComparator();
   private static final String LOCKDOWN_CREATE_PROJECTS_KEY =
@@ -111,14 +99,12 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     }
   };
   private ProjectManager projectManager;
-  private ExecutorManagerAdapter executorManagerAdapter;
+  private ExecutorManagerAdapter executorManager;
   private ScheduleManager scheduleManager;
   private UserManager userManager;
-  private FlowTriggerScheduler scheduler;
   private int downloadBufferSize;
   private boolean lockdownCreateProjects = false;
   private boolean lockdownUploadProjects = false;
-  private boolean enableQuartz = false;
 
   @Override
   public void init(final ServletConfig config) throws ServletException {
@@ -126,13 +112,11 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
     final AzkabanWebServer server = (AzkabanWebServer) getApplication();
     this.projectManager = server.getProjectManager();
-    this.executorManagerAdapter = server.getExecutorManager();
+    this.executorManager = server.getExecutorManager();
     this.scheduleManager = server.getScheduleManager();
     this.userManager = server.getUserManager();
-    this.scheduler = server.getScheduler();
     this.lockdownCreateProjects =
         server.getServerProps().getBoolean(LOCKDOWN_CREATE_PROJECTS_KEY, false);
-    this.enableQuartz = server.getServerProps().getBoolean(ConfigurationKeys.ENABLE_QUARTZ, false);
     if (this.lockdownCreateProjects) {
       logger.info("Creation of projects is locked down");
     }
@@ -214,9 +198,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
   @Override
   protected void handlePost(final HttpServletRequest req, final HttpServletResponse resp,
       final Session session) throws ServletException, IOException {
-    if (hasParam(req, "ajax")) {
-      handleAJAXAction(req, resp, session);
-    } else if (hasParam(req, "action")) {
+    if (hasParam(req, "action")) {
       final String action = getParam(req, "action");
       if (action.equals("create")) {
         handleCreate(req, resp, session);
@@ -235,7 +217,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
     final Project project = this.projectManager.getProject(projectName);
     if (project == null) {
-      ret.put(ERROR_PARAM, "Project " + projectName + " doesn't exist.");
+      ret.put("error", "Project " + projectName + " doesn't exist.");
     } else {
       ret.put("projectId", project.getId());
       final String ajaxName = getParam(req, "ajax");
@@ -313,18 +295,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         if (handleAjaxPermission(project, user, Type.WRITE, ret)) {
           ajaxSetJobOverrideProperty(project, ret, req, user);
         }
-      } else if (ajaxName.equals("checkForWritePermission")) {
-        ajaxCheckForWritePermission(project, user, ret);
-      } else if (ajaxName.equals("setFlowLock")) {
-        if (handleAjaxPermission(project, user, Type.ADMIN, ret)) {
-          ajaxSetFlowLock(project, ret, req);
-        }
-      } else if (ajaxName.equals("isFlowLocked")) {
-        if (handleAjaxPermission(project, user, Type.READ, ret)) {
-          ajaxIsFlowLocked(project, ret, req);
-        }
       } else {
-        ret.put(ERROR_PARAM, "Cannot execute command " + ajaxName);
+        ret.put("error", "Cannot execute command " + ajaxName);
       }
     }
 
@@ -337,7 +309,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       return true;
     }
 
-    ret.put(ERROR_PARAM, "Permission denied. Need " + type.toString() + " access.");
+    ret.put("error", "Permission denied. Need " + type.toString() + " access.");
     return false;
   }
 
@@ -385,19 +357,17 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       throws ServletException {
     final String flowName = getParam(req, "flow");
 
+    Flow flow = null;
     try {
-      final Flow flow = project.getFlow(flowName);
+      flow = project.getFlow(flowName);
       if (flow == null) {
-        ret.put(ERROR_PARAM, "Flow " + flowName + " not found.");
+        ret.put("error", "Flow " + flowName + " not found.");
         return;
       }
 
       ret.put("jobTypes", getFlowJobTypes(flow));
-      if (flow.getCondition() != null) {
-        ret.put("condition", flow.getCondition());
-      }
     } catch (final AccessControlException e) {
-      ret.put(ERROR_PARAM, e.getMessage());
+      ret.put("error", e.getMessage());
     }
   }
 
@@ -408,10 +378,10 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     List<ExecutableFlow> exFlows = null;
     try {
       exFlows =
-          this.executorManagerAdapter.getExecutableFlows(project.getId(), flowId, 0, 1,
+          this.executorManager.getExecutableFlows(project.getId(), flowId, 0, 1,
               Status.SUCCEEDED);
     } catch (final ExecutorManagerException e) {
-      ret.put(ERROR_PARAM, "Error retrieving executable flows");
+      ret.put("error", "Error retrieving executable flows");
       return;
     }
 
@@ -437,10 +407,10 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     int total = 0;
     try {
       total =
-          this.executorManagerAdapter.getExecutableFlows(project.getId(), flowId, from,
+          this.executorManager.getExecutableFlows(project.getId(), flowId, from,
               length, exFlows);
     } catch (final ExecutorManagerException e) {
-      ret.put(ERROR_PARAM, "Error retrieving executable flows");
+      ret.put("error", "Error retrieving executable flows");
     }
 
     ret.put("flow", flowId);
@@ -452,7 +422,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     for (final ExecutableFlow flow : exFlows) {
       final HashMap<String, Object> flowInfo = new HashMap<>();
       flowInfo.put("execId", flow.getExecutionId());
-      flowInfo.put(FLOW_ID_PARAM, flow.getFlowId());
+      flowInfo.put("flowId", flow.getFlowId());
       flowInfo.put("projectId", flow.getProjectId());
       flowInfo.put("status", flow.getStatus().toString());
       flowInfo.put("submitTime", flow.getSubmitTime());
@@ -483,13 +453,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     if (project == null) {
       this.setErrorMessageInCookie(resp, "Project " + projectName
           + " doesn't exist.");
-      resp.sendRedirect(req.getContextPath());
-      return;
-    }
-
-    if (!hasPermission(project, user, Type.READ)) {
-      this.setErrorMessageInCookie(resp, "No permission to download project " + projectName
-          + ".");
       resp.sendRedirect(req.getContextPath());
       return;
     }
@@ -591,21 +554,21 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
       // invalid project
       if (project == null) {
-        ret.put(ERROR_PARAM, "invalid project");
+        ret.put("error", "invalid project");
         isOperationSuccessful = false;
       }
 
       // project is already deleted
       if (isOperationSuccessful
           && this.projectManager.isActiveProject(project.getId())) {
-        ret.put(ERROR_PARAM, "Project " + project.getName()
+        ret.put("error", "Project " + project.getName()
             + " should be deleted before purging");
         isOperationSuccessful = false;
       }
 
       // only eligible users can purge a project
       if (isOperationSuccessful && !hasPermission(project, user, Type.ADMIN)) {
-        ret.put(ERROR_PARAM, "Cannot purge. User '" + user.getUserId()
+        ret.put("error", "Cannot purge. User '" + user.getUserId()
             + "' is not an ADMIN.");
         isOperationSuccessful = false;
       }
@@ -614,35 +577,12 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         this.projectManager.purgeProject(project, user);
       }
     } catch (final Exception e) {
-      ret.put(ERROR_PARAM, e.getMessage());
+      ret.put("error", e.getMessage());
       isOperationSuccessful = false;
     }
 
     ret.put("success", isOperationSuccessful);
     this.writeJSON(resp, ret);
-  }
-
-  private void removeAssociatedSchedules(final Project project) throws ServletException {
-    // remove regular schedules
-    try {
-      for (final Schedule schedule : this.scheduleManager.getSchedules()) {
-        if (schedule.getProjectId() == project.getId()) {
-          logger.info("removing schedule " + schedule.getScheduleId());
-          this.scheduleManager.removeSchedule(schedule);
-        }
-      }
-    } catch (final ScheduleManagerException e) {
-      throw new ServletException(e);
-    }
-
-    // remove flow trigger schedules
-    try {
-      if (this.enableQuartz) {
-        this.scheduler.unschedule(project);
-      }
-    } catch (final SchedulerException e) {
-      throw new ServletException(e);
-    }
   }
 
   private void handleRemoveProject(final HttpServletRequest req,
@@ -666,7 +606,42 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       return;
     }
 
-    removeAssociatedSchedules(project);
+    // Check if scheduled
+    Schedule sflow = null;
+    try {
+      for (final Schedule flow : this.scheduleManager.getSchedules()) {
+
+        if (flow.getProjectId() == project.getId()) {
+          sflow = flow;
+          break;
+        }
+      }
+    } catch (final ScheduleManagerException e) {
+      throw new ServletException(e);
+    }
+
+    if (sflow != null) {
+      this.setErrorMessageInCookie(resp, "Cannot delete. Please unschedule "
+          + sflow.getScheduleName() + ".");
+
+      resp.sendRedirect(req.getRequestURI() + "?project=" + projectName);
+      return;
+    }
+
+    // Check if executing
+    ExecutableFlow exflow = null;
+    for (final ExecutableFlow flow : this.executorManager.getRunningFlows()) {
+      if (flow.getProjectId() == project.getId()) {
+        exflow = flow;
+        break;
+      }
+    }
+    if (exflow != null) {
+      this.setErrorMessageInCookie(resp, "Cannot delete. Executable flow "
+          + exflow.getExecutionId() + " is still running.");
+      resp.sendRedirect(req.getRequestURI() + "?project=" + projectName);
+      return;
+    }
 
     try {
       this.projectManager.removeProject(project, user);
@@ -677,7 +652,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     }
 
     this.setSuccessMessageInCookie(resp, "Project '" + projectName
-        + "' was successfully deleted and associated schedules are removed.");
+        + "' was successfully deleted.");
     resp.sendRedirect(req.getContextPath());
   }
 
@@ -690,7 +665,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     try {
       this.projectManager.updateProjectDescription(project, description, user);
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, e.getMessage());
+      ret.put("error", e.getMessage());
     }
   }
 
@@ -701,49 +676,44 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
     final Flow flow = project.getFlow(flowName);
     if (flow == null) {
-      ret.put(ERROR_PARAM,
+      ret.put("error",
           "Flow " + flowName + " not found in project " + project.getName());
       return;
     }
 
     final Node node = flow.getNode(jobName);
     if (node == null) {
-      ret.put(ERROR_PARAM, "Job " + jobName + " not found in flow " + flowName);
+      ret.put("error", "Job " + jobName + " not found in flow " + flowName);
       return;
     }
 
-    Props jobProp;
+    final Props prop;
     try {
-      jobProp = this.projectManager.getProperties(project, flow, jobName, node.getJobSource());
+      prop = this.projectManager.getProperties(project, node.getJobSource());
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, "Failed to retrieve job properties!");
+      ret.put("error", "Failed to retrieve job properties!");
       return;
-    }
-
-    if (jobProp == null) {
-      jobProp = new Props();
     }
 
     Props overrideProp;
     try {
-      overrideProp = this.projectManager
-          .getJobOverrideProperty(project, flow, jobName, node.getJobSource());
+      overrideProp = this.projectManager.getJobOverrideProperty(project, jobName);
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, "Failed to retrieve job override properties!");
+      ret.put("error", "Failed to retrieve job override properties!");
       return;
     }
 
     ret.put("jobName", node.getId());
-    ret.put("jobType", jobProp.get("type"));
+    ret.put("jobType", prop.get("type"));
 
     if (overrideProp == null) {
-      overrideProp = new Props(jobProp);
+      overrideProp = new Props(prop);
     }
 
     final Map<String, String> generalParams = new HashMap<>();
     final Map<String, String> overrideParams = new HashMap<>();
-    for (final String ps : jobProp.getKeySet()) {
-      generalParams.put(ps, jobProp.getString(ps));
+    for (final String ps : prop.getKeySet()) {
+      generalParams.put(ps, prop.getString(ps));
     }
     for (final String ops : overrideProp.getKeySet()) {
       overrideParams.put(ops, overrideProp.getString(ops));
@@ -760,25 +730,23 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
     final Flow flow = project.getFlow(flowName);
     if (flow == null) {
-      ret.put(ERROR_PARAM,
+      ret.put("error",
           "Flow " + flowName + " not found in project " + project.getName());
       return;
     }
 
     final Node node = flow.getNode(jobName);
     if (node == null) {
-      ret.put(ERROR_PARAM, "Job " + jobName + " not found in flow " + flowName);
+      ret.put("error", "Job " + jobName + " not found in flow " + flowName);
       return;
     }
 
     final Map<String, String> jobParamGroup = this.getParamGroup(req, "jobOverride");
     final Props overrideParams = new Props(null, jobParamGroup);
     try {
-      this.projectManager
-          .setJobOverrideProperty(project, flow, overrideParams, jobName, node.getJobSource(),
-              user);
+      this.projectManager.setJobOverrideProperty(project, overrideParams, jobName, user);
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, "Failed to upload job override property");
+      ret.put("error", "Failed to upload job override property");
     }
 
   }
@@ -789,11 +757,9 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     final ArrayList<Map<String, Object>> flowList =
         new ArrayList<>();
     for (final Flow flow : project.getFlows()) {
-      if (!flow.isEmbeddedFlow()) {
-        final HashMap<String, Object> flowObj = new HashMap<>();
-        flowObj.put(FLOW_ID_PARAM, flow.getId());
-        flowList.add(flowObj);
-      }
+      final HashMap<String, Object> flowObj = new HashMap<>();
+      flowObj.put("flowId", flow.getId());
+      flowList.add(flowObj);
     }
 
     ret.put("flows", flowList);
@@ -809,11 +775,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
   private void fillFlowInfo(final Project project, final String flowId,
       final HashMap<String, Object> ret) {
     final Flow flow = project.getFlow(flowId);
-    if (flow == null) {
-      ret.put(ERROR_PARAM,
-          "Flow " + flowId + " not found in project " + project.getName());
-      return;
-    }
 
     final ArrayList<Map<String, Object>> nodeList =
         new ArrayList<>();
@@ -821,11 +782,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       final HashMap<String, Object> nodeObj = new HashMap<>();
       nodeObj.put("id", node.getId());
       nodeObj.put("type", node.getType());
-      if (node.getCondition() != null) {
-        nodeObj.put("condition", node.getCondition());
-      }
       if (node.getEmbeddedFlowId() != null) {
-        nodeObj.put(FLOW_ID_PARAM, node.getEmbeddedFlowId());
+        nodeObj.put("flowId", node.getEmbeddedFlowId());
         fillFlowInfo(project, node.getEmbeddedFlowId(), nodeObj);
       }
 
@@ -863,7 +821,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     final Node node = flow.getNode(nodeId);
 
     if (node == null) {
-      ret.put(ERROR_PARAM, "Job " + nodeId + " doesn't exist.");
+      ret.put("error", "Job " + nodeId + " doesn't exist.");
       return;
     }
 
@@ -871,20 +829,20 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     ret.put("flow", flowId);
     ret.put("type", node.getType());
 
-    final Props jobProps;
+    final Props props;
     try {
-      jobProps = this.projectManager.getProperties(project, flow, nodeId, node.getJobSource());
+      props = this.projectManager.getProperties(project, node.getJobSource());
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, "Failed to upload job override property for " + nodeId);
+      ret.put("error", "Failed to upload job override property for " + nodeId);
       return;
     }
 
-    if (jobProps == null) {
-      ret.put(ERROR_PARAM, "Properties for " + nodeId + " isn't found.");
+    if (props == null) {
+      ret.put("error", "Properties for " + nodeId + " isn't found.");
       return;
     }
 
-    final Map<String, String> properties = PropsUtils.toStringMap(jobProps, true);
+    final Map<String, String> properties = PropsUtils.toStringMap(props, true);
     ret.put("props", properties);
 
     if (node.getType().equals("flow")) {
@@ -929,9 +887,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       nodeList.add(nodeObj);
     }
 
-    ret.put(FLOW_ID_PARAM, flowId);
+    ret.put("flowId", flowId);
     ret.put("nodes", nodeList);
-    ret.put(FLOW_IS_LOCKED_PARAM, flow.isLocked());
   }
 
   private void ajaxAddProxyUser(final Project project, final HashMap<String, Object> ret,
@@ -943,10 +900,10 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       try {
         this.projectManager.addProjectProxyUser(project, name, user);
       } catch (final ProjectManagerException e) {
-        ret.put(ERROR_PARAM, e.getMessage());
+        ret.put("error", e.getMessage());
       }
     } else {
-      ret.put(ERROR_PARAM, "User " + user.getUserId()
+      ret.put("error", "User " + user.getUserId()
           + " has no permission to add " + name + " as proxy user.");
       return;
     }
@@ -962,7 +919,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     try {
       this.projectManager.removeProjectProxyUser(project, name, user);
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, e.getMessage());
+      ret.put("error", e.getMessage());
     }
   }
 
@@ -973,20 +930,20 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
     if (group) {
       if (project.getGroupPermission(name) != null) {
-        ret.put(ERROR_PARAM, "Group permission already exists.");
+        ret.put("error", "Group permission already exists.");
         return;
       }
       if (!this.userManager.validateGroup(name)) {
-        ret.put(ERROR_PARAM, "Group is invalid.");
+        ret.put("error", "Group is invalid.");
         return;
       }
     } else {
       if (project.getUserPermission(name) != null) {
-        ret.put(ERROR_PARAM, "User permission already exists.");
+        ret.put("error", "User permission already exists.");
         return;
       }
       if (!this.userManager.validateUser(name)) {
-        ret.put(ERROR_PARAM, "User is invalid.");
+        ret.put("error", "User is invalid.");
         return;
       }
     }
@@ -1012,7 +969,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     try {
       this.projectManager.updateProjectPermission(project, name, perm, group, user);
     } catch (final ProjectManagerException e) {
-      ret.put(ERROR_PARAM, e.getMessage());
+      ret.put("error", e.getMessage());
     }
   }
 
@@ -1038,7 +995,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     }
 
     if (perm == null) {
-      ret.put(ERROR_PARAM, "Permissions for " + name + " cannot be found.");
+      ret.put("error", "Permissions for " + name + " cannot be found.");
       return;
     }
 
@@ -1061,13 +1018,13 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         this.projectManager
             .updateProjectPermission(project, name, perm, group, user);
       } catch (final ProjectManagerException e) {
-        ret.put(ERROR_PARAM, e.getMessage());
+        ret.put("error", e.getMessage());
       }
     } else {
       try {
         this.projectManager.removeProjectPermission(project, name, group, user);
       } catch (final ProjectManagerException e) {
-        ret.put(ERROR_PARAM, e.getMessage());
+        ret.put("error", e.getMessage());
       }
     }
   }
@@ -1110,89 +1067,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     final String[] proxyUsers = project.getProxyUsers().toArray(new String[0]);
     ret.put("proxyUsers", proxyUsers);
   }
-
-  private void ajaxCheckForWritePermission(final Project project, final User user,
-      final HashMap<String, Object> ret) {
-    ret.put("hasWritePermission", hasPermission(project, user, Type.WRITE));
-  }
-
-  /**
-   * Set if a flow is locked.
-   *
-   * @param project the project for the flow.
-   * @param ret the return value.
-   * @param req the http request.
-   */
-  private void ajaxSetFlowLock(final Project project,
-      final HashMap<String, Object> ret, final HttpServletRequest req)
-      throws ServletException {
-    final String flowName = getParam(req, FLOW_NAME_PARAM);
-    final Flow flow = project.getFlow(flowName);
-    if (flow == null) {
-      ret.put(ERROR_PARAM,
-          "Flow " + flowName + " not found in project " + project.getName());
-      return;
-    }
-
-    final boolean isLocked = Boolean.parseBoolean(getParam(req, FLOW_IS_LOCKED_PARAM));
-
-    // if there is a change in the locked value, then check to see if the project has a flow trigger
-    // that needs to be paused/resumed.
-    if (isLocked != flow.isLocked()) {
-      try {
-        if (this.projectManager.hasFlowTrigger(project, flow)) {
-          if (isLocked) {
-            if (this.scheduler.pauseFlowTriggerIfPresent(project.getId(), flow.getId())) {
-              logger.info("Flow trigger for flow " + project.getName() + "." + flow.getId() +
-                  " is paused");
-            } else {
-              logger.warn("Flow trigger for flow " + project.getName() + "." + flow.getId() +
-                  " doesn't exist");
-            }
-          } else {
-            if (this.scheduler.resumeFlowTriggerIfPresent(project.getId(), flow.getId())) {
-              logger.info("Flow trigger for flow " + project.getName() + "." + flow.getId() +
-                  " is resumed");
-            } else {
-              logger.warn("Flow trigger for flow " + project.getName() + "." + flow.getId() +
-                  " doesn't exist");
-            }
-          }
-        }
-      } catch (final Exception e) {
-        ret.put(ERROR_PARAM, e);
-      }
-    }
-
-    flow.setLocked(isLocked);
-    ret.put(FLOW_IS_LOCKED_PARAM, flow.isLocked());
-    ret.put(FLOW_ID_PARAM, flow.getId());
-    this.projectManager.updateFlow(project, flow);
-  }
-
-  /**
-   * Returns true if the flow is locked, false if it is unlocked.
-   *
-   * @param project the project containing the flow.
-   * @param ret the return value.
-   * @param req the http request.
-   */
-  private void ajaxIsFlowLocked(final Project project,
-      final HashMap<String, Object> ret, final HttpServletRequest req)
-      throws ServletException {
-    final String flowName = getParam(req, FLOW_NAME_PARAM);
-
-    final Flow flow = project.getFlow(flowName);
-    if (flow == null) {
-      ret.put(ERROR_PARAM,
-          "Flow " + flowName + " not found in project " + project.getName());
-      return;
-    }
-
-    ret.put(FLOW_ID_PARAM, flow.getId());
-    ret.put(FLOW_IS_LOCKED_PARAM, flow.isLocked());
-  }
-
 
   private void handleProjectLogsPage(final HttpServletRequest req,
       final HttpServletResponse resp, final Session session) throws ServletException,
@@ -1255,22 +1129,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     final Page page =
         newPage(req, resp, session,
             "azkaban/webapp/servlet/velocity/jobhistorypage.vm");
-
-    final String jobId = getParam(req, "job");
-    page.add("jobId", jobId);
-
-    int pageNum = Math.max(1, getIntParam(req, "page", 1));
-    page.add("page", pageNum);
-
-    final int pageSize = Math.max(1, getIntParam(req, "size", 25));
-    page.add("pageSize", pageSize);
-
-    page.add("recordCount", 0);
-    page.add("projectId", "");
-    page.add("projectName", "");
-    page.add("dataSeries", "[]");
-    page.add("history", null);
-
     final String projectName = getParam(req, "project");
     final User user = session.getUser();
 
@@ -1286,35 +1144,87 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       return;
     }
 
+    final String jobId = getParam(req, "job");
+    final int pageNum = getIntParam(req, "page", 1);
+    final int pageSize = getIntParam(req, "size", 25);
+
     page.add("projectId", project.getId());
     page.add("projectName", project.getName());
+    page.add("jobid", jobId);
+    page.add("page", pageNum);
 
+    final int skipPage = (pageNum - 1) * pageSize;
+
+    int numResults = 0;
     try {
-      final int numResults = this.executorManagerAdapter.getNumberOfJobExecutions(project, jobId);
-      page.add("recordCount", numResults);
+      numResults = this.executorManager.getNumberOfJobExecutions(project, jobId);
+      final int maxPage = (numResults / pageSize) + 1;
+      List<ExecutableJobInfo> jobInfo =
+          this.executorManager.getExecutableJobs(project, jobId, skipPage, pageSize);
 
-      final int totalPages = ((numResults - 1) / pageSize) + 1;
-      if (pageNum > totalPages) {
-        pageNum = totalPages;
-        page.add("page", pageNum);
+      if (jobInfo == null || jobInfo.isEmpty()) {
+        jobInfo = null;
       }
-      final int elementsToSkip = (pageNum - 1) * pageSize;
-      final List<ExecutableJobInfo> jobInfo =
-          this.executorManagerAdapter.getExecutableJobs(project, jobId, elementsToSkip, pageSize);
+      page.add("history", jobInfo);
 
-      if (CollectionUtils.isNotEmpty(jobInfo)) {
-        page.add("history", jobInfo);
+      page.add("previous", new PageSelection("Previous", pageSize, true, false,
+          Math.max(pageNum - 1, 1)));
 
+      page.add(
+          "next",
+          new PageSelection("Next", pageSize, false, false, Math.min(
+              pageNum + 1, maxPage)));
+
+      if (jobInfo != null) {
         final ArrayList<Object> dataSeries = new ArrayList<>();
         for (final ExecutableJobInfo info : jobInfo) {
           final Map<String, Object> map = info.toObject();
           dataSeries.add(map);
         }
         page.add("dataSeries", JSONUtils.toJSON(dataSeries));
+      } else {
+        page.add("dataSeries", "[]");
       }
     } catch (final ExecutorManagerException e) {
       page.add("errorMsg", e.getMessage());
     }
+
+    // Now for the 5 other values.
+    int pageStartValue = 1;
+    if (pageNum > 3) {
+      pageStartValue = pageNum - 2;
+    }
+    final int maxPage = (numResults / pageSize) + 1;
+
+    page.add(
+        "page1",
+        new PageSelection(String.valueOf(pageStartValue), pageSize,
+            pageStartValue > maxPage, pageStartValue == pageNum, Math.min(
+            pageStartValue, maxPage)));
+    pageStartValue++;
+    page.add(
+        "page2",
+        new PageSelection(String.valueOf(pageStartValue), pageSize,
+            pageStartValue > maxPage, pageStartValue == pageNum, Math.min(
+            pageStartValue, maxPage)));
+    pageStartValue++;
+    page.add(
+        "page3",
+        new PageSelection(String.valueOf(pageStartValue), pageSize,
+            pageStartValue > maxPage, pageStartValue == pageNum, Math.min(
+            pageStartValue, maxPage)));
+    pageStartValue++;
+    page.add(
+        "page4",
+        new PageSelection(String.valueOf(pageStartValue), pageSize,
+            pageStartValue > maxPage, pageStartValue == pageNum, Math.min(
+            pageStartValue, maxPage)));
+    pageStartValue++;
+    page.add(
+        "page5",
+        new PageSelection(String.valueOf(pageStartValue), pageSize,
+            pageStartValue > maxPage, pageStartValue == pageNum, Math.min(
+            pageStartValue, maxPage)));
 
     page.render();
   }
@@ -1392,8 +1302,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     Flow flow = null;
     try {
       project = this.projectManager.getProject(projectName);
-      logger.info("JobPage: project " + projectName + " version is " + project.getVersion()
-          + ", reference is " + System.identityHashCode(project));
       if (project == null) {
         page.add("errorMsg", "Project " + projectName + " not found.");
         page.render();
@@ -1420,17 +1328,18 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         return;
       }
 
-      Props jobProp = this.projectManager
-          .getJobOverrideProperty(project, flow, jobName, node.getJobSource());
-      if (jobProp == null) {
-        jobProp = this.projectManager.getProperties(project, flow, jobName, node.getJobSource());
+      final Props prop = this.projectManager.getProperties(project, node.getJobSource());
+      Props overrideProp =
+          this.projectManager.getJobOverrideProperty(project, jobName);
+      if (overrideProp == null) {
+        overrideProp = new Props();
       }
-
+      final Props comboProp = new Props(prop);
+      for (final String key : overrideProp.getKeySet()) {
+        comboProp.put(key, overrideProp.get(key));
+      }
       page.add("jobid", node.getId());
       page.add("jobtype", node.getType());
-      if (node.getCondition() != null) {
-        page.add("condition", node.getCondition());
-      }
 
       final ArrayList<String> dependencies = new ArrayList<>();
       final Set<Edge> inEdges = flow.getInEdges(node.getId());
@@ -1472,8 +1381,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       final ArrayList<Pair<String, String>> parameters =
           new ArrayList<>();
       // Parameter
-      for (final String key : jobProp.getKeySet()) {
-        final String value = jobProp.get(key);
+      for (final String key : comboProp.getKeySet()) {
+        final String value = comboProp.get(key);
         parameters.add(new Pair<>(key, value));
       }
 
@@ -1533,7 +1442,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         return;
       }
 
-      final Props prop = this.projectManager.getProperties(project, flow, null, propSource);
+      final Props prop = this.projectManager.getProperties(project, propSource);
       if (prop == null) {
         page.add("errorMsg", "Property " + propSource + " not found.");
         logger.info("Display project property. Project " + projectName +
@@ -1599,7 +1508,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     Flow flow = null;
     try {
       project = this.projectManager.getProject(projectName);
-
       if (project == null) {
         page.add("errorMsg", "Project " + projectName + " not found.");
         page.render();
@@ -1617,14 +1525,6 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         page.add("errorMsg", "Flow " + flowName + " not found.");
       } else {
         page.add("flowid", flow.getId());
-        page.add("isLocked", flow.isLocked());
-        if (flow.isLocked()) {
-          final Props props = this.projectManager.getProps();
-          final String lockedFlowMsg = String.format(props.getString(ConfigurationKeys
-                  .AZKABAN_LOCKED_FLOW_ERROR_MESSAGE, Constants.DEFAULT_LOCKED_FLOW_ERROR_MESSAGE),
-              flow.getId(), projectName);
-          page.add("error_message", lockedFlowMsg);
-        }
       }
     } catch (final AccessControlException e) {
       page.add("errorMsg", e.getMessage());
@@ -1685,9 +1585,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
           page.add("exec", false);
         }
 
-        final List<Flow> flows = project.getFlows().stream().filter(flow -> !flow.isEmbeddedFlow())
-            .collect(Collectors.toList());
-
+        final List<Flow> flows = project.getFlows();
         if (!flows.isEmpty()) {
           Collections.sort(flows, FLOW_ID_COMPARATOR);
           page.add("flows", flows);
@@ -1719,7 +1617,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
           "User " + user.getUserId()
               + " doesn't have permission to create projects.";
       logger.info(message);
-      status = ERROR_PARAM;
+      status = "error";
     } else {
       try {
         this.projectManager.createProject(projectName, projectDescription, user);
@@ -1730,11 +1628,10 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         params.put("path", redirect);
       } catch (final ProjectManagerException e) {
         message = e.getMessage();
-        status = ERROR_PARAM;
+        status = "error";
       }
     }
-    final String response = AbstractAzkabanServlet
-        .createJsonResponse(status, message, action, params);
+    final String response = createJsonResponse(status, message, action, params);
     try {
       final Writer write = resp.getWriter();
       write.append(response);
@@ -1746,7 +1643,7 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
 
   private void registerError(final Map<String, String> ret, final String error,
       final HttpServletResponse resp, final int returnCode) {
-    ret.put(ERROR_PARAM, error);
+    ret.put("error", error);
     resp.setStatus(returnCode);
   }
 
@@ -1755,29 +1652,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       throws ServletException, IOException {
     final User user = session.getUser();
     final String projectName = (String) multipart.get("project");
-    final Project project = validateUploadAndGetProject(resp, ret, user, projectName);
-    if (project == null) {
-      return;
-    }
-
-    final FileItem item = (FileItem) multipart.get("file");
-    final String name = item.getName();
-    String type = null;
-
-    final String contentType = item.getContentType();
-    if (contentType != null && (contentType.startsWith(APPLICATION_ZIP_MIME_TYPE) ||
-        contentType.startsWith("application/x-zip-compressed") ||
-        contentType.startsWith("application/octet-stream"))) {
-      type = "zip";
-    } else {
-      item.delete();
-      registerError(ret, "File type " + contentType + " unrecognized.", resp,
-          HttpServletResponse.SC_BAD_REQUEST);
-      return;
-    }
-
+    final Project project = this.projectManager.getProject(projectName);
     final String autoFix = (String) multipart.get("fix");
-
     final Props props = new Props();
     if (autoFix != null && autoFix.equals("off")) {
       props.put(ValidatorConfigs.CUSTOM_AUTO_FIX_FLAG_PARAM, "false");
@@ -1785,194 +1661,119 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
       props.put(ValidatorConfigs.CUSTOM_AUTO_FIX_FLAG_PARAM, "true");
     }
 
-    ret.put("projectId", String.valueOf(project.getId()));
-
-    final File tempDir = Utils.createTempDir();
-    OutputStream out = null;
-    try {
-      logger.info("Uploading file " + name);
-      final File archiveFile = new File(tempDir, name);
-      out = new BufferedOutputStream(new FileOutputStream(archiveFile));
-      IOUtils.copy(item.getInputStream(), out);
-      out.close();
-
-      if (this.enableQuartz) {
-        //todo chengren311: should maintain atomicity,
-        // e.g, if uploadProject fails, associated schedule shouldn't be added.
-        this.scheduler.unschedule(project);
-      }
-
-      // get the locked flows for the project, so that they can be locked again after upload
-      final List<String> lockedFlows = getLockedFlows(project);
-
-      final Map<String, ValidationReport> reports = this.projectManager
-          .uploadProject(project, archiveFile, type, user, props);
-
-      if (this.enableQuartz) {
-        this.scheduler.schedule(project, user.getUserId());
-      }
-
-      // reset locks for flows as needed
-      lockFlowsForProject(project, lockedFlows);
-
-      // remove schedule of renamed/deleted flows
-      removeScheduleOfDeletedFlows(project, this.scheduleManager, (schedule) -> {
-        logger.info(
-            "Removed schedule with id {} of renamed/deleted flow: {} from project: {}.",
-            schedule.getScheduleId(), schedule.getFlowName(), schedule.getProjectName());
-        this.projectManager.postProjectEvent(project, EventType.SCHEDULE, "azkaban",
-            "Schedule " + schedule.toString() + " has been removed.");
-      });
-
-      registerErrorsAndWarningsFromValidationReport(resp, ret, reports);
-    } catch (final Exception e) {
-      logger.info("Installation Failed.", e);
-      String error = e.getMessage();
-      if (error.length() > 512) {
-        error = error.substring(0, 512) + "<br>Too many errors to display.<br>";
-      }
-      registerError(ret, "Installation Failed.<br>" + error, resp,
-          HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-    } finally {
-      if (out != null) {
-        out.close();
-      }
-      if (tempDir.exists()) {
-        FileUtils.deleteDirectory(tempDir);
-      }
-    }
-
-    logger.info("Upload: project " + projectName + " version is " + project.getVersion()
-        + ", reference is " + System.identityHashCode(project));
-    ret.put("version", String.valueOf(project.getVersion()));
-  }
-
-  /**
-   * @return project. Null if invalid upload params or not enough permissions to proceed.
-   */
-  private Project validateUploadAndGetProject(final HttpServletResponse resp,
-      final Map<String, String> ret, final User user, final String projectName) {
-    if (projectName == null || projectName.isEmpty()) {
-      registerError(ret, "No project name found.", resp, HttpServletResponse.SC_BAD_REQUEST);
-      return null;
-    }
-    final Project project = this.projectManager.getProject(projectName);
-    if (project == null || !project.isActive()) {
-      final String failureCause = (project == null) ? "doesn't exist." : "was already removed.";
-      registerError(ret, "Installation Failed. Project '" + projectName + " "
-          + failureCause, resp, HttpServletResponse.SC_GONE);
-      return null;
-    }
-
-    logger.info(
-        "Upload: reference of project " + projectName + " is " + System.identityHashCode(project));
-
     if (this.lockdownUploadProjects && !UserUtils
         .hasPermissionforAction(this.userManager, user, Type.UPLOADPROJECTS)) {
       final String message =
           "Project uploading is locked out. Only admin users and users with special permissions can upload projects. "
               + "User " + user.getUserId() + " doesn't have permission to upload project.";
       logger.info(message);
-      registerError(ret, message, resp, HttpServletResponse.SC_FORBIDDEN);
-      return null;
-    }
-    if (!hasPermission(project, user, Type.WRITE)) {
-      registerError(ret,
-          "Installation Failed. User '" + user.getUserId() + "' does not have write access.",
-          resp, HttpServletResponse.SC_BAD_REQUEST);
-      return null;
-    }
-    return project;
-  }
+      registerError(ret, message, resp, 403);
+    } else if (projectName == null || projectName.isEmpty()) {
+      registerError(ret, "No project name found.", resp, 400);
+    } else if (project == null) {
+      registerError(ret, "Installation Failed. Project '" + projectName
+          + "' doesn't exist.", resp, 400);
+    } else if (!hasPermission(project, user, Type.WRITE)) {
+      registerError(ret, "Installation Failed. User '" + user.getUserId()
+          + "' does not have write access.", resp, 400);
+    } else {
+      ret.put("projectId", String.valueOf(project.getId()));
 
-  /**
-   * Remove schedule of renamed/deleted flows
-   *
-   * @param project project from which old flows will be unscheduled
-   * @param scheduleManager the schedule manager
-   * @param onDeletedSchedule a callback function to execute with every deleted schedule
-   */
-  static void removeScheduleOfDeletedFlows(final Project project,
-      final ScheduleManager scheduleManager, final Consumer<Schedule> onDeletedSchedule)
-      throws ScheduleManagerException {
-    final Set<String> flowNameList = project.getFlows().stream().map(f -> f.getId()).collect(
-        Collectors.toSet());
+      final FileItem item = (FileItem) multipart.get("file");
+      final String name = item.getName();
+      String type = null;
 
-    for (final Schedule schedule : scheduleManager.getSchedules()) {
-      if (schedule.getProjectId() == project.getId() &&
-          !flowNameList.contains(schedule.getFlowName())) {
-        scheduleManager.removeSchedule(schedule);
-        onDeletedSchedule.accept(schedule);
+      final String contentType = item.getContentType();
+      if (contentType != null
+          && (contentType.startsWith(APPLICATION_ZIP_MIME_TYPE)
+          || contentType.startsWith("application/x-zip-compressed") || contentType
+          .startsWith("application/octet-stream"))) {
+        type = "zip";
+      } else {
+        item.delete();
+        registerError(ret, "File type " + contentType + " unrecognized.", resp, 400);
+
+        return;
       }
-    }
-  }
 
-  private void registerErrorsAndWarningsFromValidationReport(final HttpServletResponse resp,
-      final Map<String, String> ret, final Map<String, ValidationReport> reports) {
-    final StringBuffer errorMsgs = new StringBuffer();
-    final StringBuffer warnMsgs = new StringBuffer();
-    for (final Entry<String, ValidationReport> reportEntry : reports.entrySet()) {
-      final ValidationReport report = reportEntry.getValue();
-      for (final String msg : report.getInfoMsgs()) {
-        switch (ValidationReport.getInfoMsgLevel(msg)) {
-          case ERROR:
-            errorMsgs.append(ValidationReport.getInfoMsg(msg) + "<br/>");
-            break;
-          case WARN:
-            warnMsgs.append(ValidationReport.getInfoMsg(msg) + "<br/>");
-            break;
-          default:
-            break;
+      final File tempDir = Utils.createTempDir();
+      OutputStream out = null;
+      try {
+        logger.info("Uploading file " + name);
+        final File archiveFile = new File(tempDir, name);
+        out = new BufferedOutputStream(new FileOutputStream(archiveFile));
+        IOUtils.copy(item.getInputStream(), out);
+        out.close();
+
+        final Map<String, ValidationReport> reports =
+            this.projectManager.uploadProject(project, archiveFile, type, user,
+                props);
+        final StringBuffer errorMsgs = new StringBuffer();
+        final StringBuffer warnMsgs = new StringBuffer();
+        for (final Entry<String, ValidationReport> reportEntry : reports.entrySet()) {
+          final ValidationReport report = reportEntry.getValue();
+          if (!report.getInfoMsgs().isEmpty()) {
+            for (final String msg : report.getInfoMsgs()) {
+              switch (ValidationReport.getInfoMsgLevel(msg)) {
+                case ERROR:
+                  errorMsgs.append(ValidationReport.getInfoMsg(msg) + "<br/>");
+                  break;
+                case WARN:
+                  warnMsgs.append(ValidationReport.getInfoMsg(msg) + "<br/>");
+                  break;
+                default:
+                  break;
+              }
+            }
+          }
+          if (!report.getErrorMsgs().isEmpty()) {
+            errorMsgs.append("Validator " + reportEntry.getKey()
+                + " reports errors:<ul>");
+            for (final String msg : report.getErrorMsgs()) {
+              errorMsgs.append("<li>" + msg + "</li>");
+            }
+            errorMsgs.append("</ul>");
+          }
+          if (!report.getWarningMsgs().isEmpty()) {
+            warnMsgs.append("Validator " + reportEntry.getKey()
+                + " reports warnings:<ul>");
+            for (final String msg : report.getWarningMsgs()) {
+              warnMsgs.append("<li>" + msg + "</li>");
+            }
+            warnMsgs.append("</ul>");
+          }
+        }
+        if (errorMsgs.length() > 0) {
+          // If putting more than 4000 characters in the cookie, the entire
+          // message
+          // will somehow get discarded.
+          registerError(ret, errorMsgs.length() > 4000 ? errorMsgs.substring(0, 4000)
+              : errorMsgs.toString(), resp, 500);
+        }
+        if (warnMsgs.length() > 0) {
+          ret.put(
+              "warn",
+              warnMsgs.length() > 4000 ? warnMsgs.substring(0, 4000) : warnMsgs
+                  .toString());
+        }
+      } catch (final Exception e) {
+        logger.info("Installation Failed.", e);
+        String error = e.getMessage();
+        if (error.length() > 512) {
+          error =
+              error.substring(0, 512) + "<br>Too many errors to display.<br>";
+        }
+        registerError(ret, "Installation Failed.<br>" + error, resp, 500);
+      } finally {
+        if (out != null) {
+          out.close();
+        }
+        if (tempDir.exists()) {
+          FileUtils.deleteDirectory(tempDir);
         }
       }
-      if (!report.getErrorMsgs().isEmpty()) {
-        errorMsgs.append("Validator " + reportEntry.getKey() + " reports errors:<ul>");
-        for (final String msg : report.getErrorMsgs()) {
-          errorMsgs.append("<li>" + msg + "</li>");
-        }
-        errorMsgs.append("</ul>");
-      }
-      if (!report.getWarningMsgs().isEmpty()) {
-        warnMsgs.append("Validator " + reportEntry.getKey() + " reports warnings:<ul>");
-        for (final String msg : report.getWarningMsgs()) {
-          warnMsgs.append("<li>" + msg + "</li>");
-        }
-        warnMsgs.append("</ul>");
-      }
-    }
-    if (errorMsgs.length() > 0) {
-      // If putting more than 4000 characters in the cookie, the entire message will somehow
-      // get discarded.
-      registerError(ret,
-          errorMsgs.length() > 4000 ? errorMsgs.substring(0, 4000) : errorMsgs.toString(), resp,
-          HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-    }
-    if (warnMsgs.length() > 0) {
-      ret.put("warn", warnMsgs.length() > 4000 ? warnMsgs.substring(0, 4000) : warnMsgs.toString());
-    }
-  }
 
-  /**
-   * @return the list of locked flows for the specified project.
-   */
-  private List<String> getLockedFlows(final Project project) {
-    final List<Flow> flows = project.getFlows();
-    return flows.stream().filter(flow -> flow.isLocked()).map(flow -> flow.getId())
-        .collect(Collectors.toList());
-  }
-
-  /**
-   * Lock the specified flows for the project.
-   *
-   * @param project the project
-   * @param lockedFlows list of flow IDs of flows to lock
-   */
-  private void lockFlowsForProject(final Project project, final List<String> lockedFlows) {
-    for (final String flowId : lockedFlows) {
-      final Flow flow = project.getFlow(flowId);
-      if (flow != null) {
-        flow.setLocked(true);
-      }
+      ret.put("version", String.valueOf(project.getVersion()));
     }
   }
 
@@ -1983,8 +1784,8 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
     final String projectName = (String) multipart.get("project");
     ajaxHandleUpload(req, resp, ret, multipart, session);
 
-    if (ret.containsKey(ERROR_PARAM)) {
-      setErrorMessageInCookie(resp, ret.get(ERROR_PARAM));
+    if (ret.containsKey("error")) {
+      setErrorMessageInCookie(resp, ret.get("error"));
     }
 
     if (ret.containsKey("warn")) {
@@ -2015,16 +1816,16 @@ public class ProjectManagerServlet extends LoginAbstractAzkabanServlet {
         if (this.projectManager.loadProjectWhiteList()) {
           ret.put("success", "Project whitelist re-loaded!");
         } else {
-          ret.put(ERROR_PARAM, "azkaban.properties doesn't contain property "
+          ret.put("error", "azkaban.properties doesn't contain property "
               + ProjectWhitelist.XML_FILE_PARAM);
         }
       } catch (final Exception e) {
-        ret.put(ERROR_PARAM,
+        ret.put("error",
             "Exception occurred while trying to re-load project whitelist: "
                 + e);
       }
     } else {
-      ret.put(ERROR_PARAM, "Provided session doesn't have admin privilege.");
+      ret.put("error", "Provided session doesn't have admin privilege.");
     }
 
     this.writeJSON(resp, ret);

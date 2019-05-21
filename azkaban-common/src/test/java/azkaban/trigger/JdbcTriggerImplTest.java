@@ -18,19 +18,25 @@ package azkaban.trigger;
 
 import static org.junit.Assert.assertTrue;
 
+import azkaban.database.AzkabanConnectionPoolTest;
+import azkaban.database.AzkabanDataSource;
+import azkaban.database.AzkabanDatabaseSetup;
 import azkaban.db.DatabaseOperator;
+import azkaban.db.DatabaseOperatorImpl;
 import azkaban.executor.ExecutionOptions;
 import azkaban.trigger.builtin.BasicTimeChecker;
 import azkaban.trigger.builtin.ExecuteFlowAction;
-import azkaban.utils.TimeUtils;
+import azkaban.utils.Props;
+import azkaban.utils.Utils;
+import java.io.File;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.commons.dbutils.QueryRunner;
 import org.joda.time.DateTime;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -38,12 +44,20 @@ import org.junit.Test;
 
 public class JdbcTriggerImplTest {
 
-  private static DatabaseOperator dbOperator;
-  private TriggerLoader loader;
+  public static AzkabanDataSource dataSource = new AzkabanConnectionPoolTest.EmbeddedH2BasicDataSource();
+  TriggerLoader loader;
+  DatabaseOperator dbOperator;
 
   @BeforeClass
   public static void prepare() throws Exception {
-    dbOperator = azkaban.test.Utils.initTestDB();
+    final Props props = new Props();
+
+    final String sqlScriptsDir = new File("../azkaban-db/src/main/sql/").getCanonicalPath();
+    props.put("database.sql.scripts.dir", sqlScriptsDir);
+
+    final AzkabanDatabaseSetup setup = new AzkabanDatabaseSetup(dataSource, props);
+    setup.loadTableInfo();
+    setup.updateDatabase(true, false);
 
     final CheckerTypeLoader checkerTypeLoader = new CheckerTypeLoader();
     final ActionTypeLoader actionTypeLoader = new ActionTypeLoader();
@@ -62,19 +76,11 @@ public class JdbcTriggerImplTest {
     actionTypeLoader.registerActionType(ExecuteFlowAction.type, ExecuteFlowAction.class);
   }
 
-  @AfterClass
-  public static void destroyDB() throws Exception {
-    try {
-      dbOperator.update("DROP ALL OBJECTS");
-      dbOperator.update("SHUTDOWN");
-    } catch (final SQLException e) {
-      e.printStackTrace();
-    }
-  }
-
   @Before
   public void setUp() {
-    this.loader = new JdbcTriggerImpl(dbOperator);
+
+    this.dbOperator = new DatabaseOperatorImpl(new QueryRunner(dataSource));
+    this.loader = new JdbcTriggerImpl(this.dbOperator);
   }
 
   @Test
@@ -131,7 +137,7 @@ public class JdbcTriggerImplTest {
     final DateTime now = DateTime.now();
     final ConditionChecker checker1 =
         new BasicTimeChecker("timeChecker1", now.getMillis(), now.getZone(),
-            true, true, TimeUtils.parsePeriodString("1h"), null);
+            true, true, Utils.parsePeriodString("1h"), null);
     final Map<String, ConditionChecker> checkers1 =
         new HashMap<>();
     checkers1.put(checker1.getId(), checker1);
@@ -141,21 +147,24 @@ public class JdbcTriggerImplTest {
     final List<TriggerAction> actions = new ArrayList<>();
     final TriggerAction action =
         new ExecuteFlowAction("executeAction", 1, projName, flowName,
-            "azkaban", new ExecutionOptions());
+            "azkaban", new ExecutionOptions(), null);
     actions.add(action);
 
-    return new Trigger.TriggerBuilder("azkaban",
+    final Trigger t = new Trigger.TriggerBuilder("azkaban",
         source,
         triggerCond,
         expireCond,
         actions)
         .build();
+
+    return t;
   }
 
   @After
   public void clearDB() {
     try {
-      dbOperator.update("DELETE FROM triggers");
+      this.dbOperator.update("DELETE FROM triggers");
+
     } catch (final SQLException e) {
       e.printStackTrace();
       return;

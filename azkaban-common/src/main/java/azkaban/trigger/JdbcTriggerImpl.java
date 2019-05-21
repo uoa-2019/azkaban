@@ -16,13 +16,13 @@
 
 package azkaban.trigger;
 
-import azkaban.db.EncodingType;
+import azkaban.database.EncodingType;
 import azkaban.db.DatabaseOperator;
 import azkaban.db.SQLTransaction;
 import azkaban.utils.GZIPUtils;
 import azkaban.utils.JSONUtils;
-import javax.inject.Inject;
-import javax.inject.Singleton;
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;

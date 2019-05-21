@@ -13,38 +13,26 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 package azkaban.utils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
-import org.apache.commons.fileupload.util.Streams;
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.log4j.Logger;
 
 
 /**
@@ -52,7 +40,7 @@ import org.slf4j.LoggerFactory;
  */
 public class FileIOUtils {
 
-  private static final Logger log = LoggerFactory.getLogger(FileIOUtils.class);
+  private final static Logger logger = Logger.getLogger(FileIOUtils.class);
 
   /**
    * Check if a directory is writable
@@ -79,57 +67,10 @@ public class FileIOUtils {
     return true;
   }
 
-  /**
-   * Delete a directory, log the error if deletion fails.
-   */
-  public static void deleteDirectorySilently(final File dir) {
-    if (dir != null) {
-      try {
-        FileUtils.deleteDirectory(dir);
-      } catch (final IOException e) {
-        log.error("error when deleting dir {}", dir, e);
-      }
-    }
-  }
-
-
-  /**
-   * Dumps a number into a new file.
-   *
-   * @param filePath the target file
-   * @param num the number to dump
-   * @throws IOException if file already exists
-   */
-  public static void dumpNumberToFile(final Path filePath, final long num) throws IOException {
-    try (final BufferedWriter writer = Files
-        .newBufferedWriter(filePath, StandardCharsets.UTF_8)) {
-      writer.write(String.valueOf(num));
-    } catch (final IOException e) {
-      log.error("Failed to write the number {} to the file {}", num, filePath, e);
-      throw e;
-    }
-  }
-
-  /**
-   * Reads a number from a file.
-   *
-   * @param filePath the target file
-   */
-  public static long readNumberFromFile(final Path filePath)
-      throws IOException, NumberFormatException {
-    final List<String> allLines = Files.readAllLines(filePath);
-    if (!allLines.isEmpty()) {
-      return Long.parseLong(allLines.get(0));
-    } else {
-      throw new NumberFormatException("unable to parse empty file " + filePath.toString());
-    }
-  }
-
   public static String getSourcePathFromClass(final Class<?> containedClass) {
-    final String containedClassPath = containedClass.getProtectionDomain().getCodeSource()
-        .getLocation().getPath();
-
-    File file = new File(containedClassPath);
+    File file =
+        new File(containedClass.getProtectionDomain().getCodeSource()
+            .getLocation().getPath());
 
     if (!file.isDirectory() && file.getName().endsWith(".class")) {
       final String name = containedClass.getName();
@@ -140,71 +81,16 @@ public class FileIOUtils {
       }
       return file.getPath();
     } else {
-      return containedClassPath;
+      return containedClass.getProtectionDomain().getCodeSource().getLocation()
+          .getPath();
     }
   }
 
   /**
-   * Load output file into a Props object
-   *
-   * @param file output properties file
-   * @return Props object
+   * Run a unix command that will hard link files and recurse into directories.
    */
-  public static Props loadOutputFileProps(final File file) {
-    InputStream reader = null;
-    try {
-      log.info("output properties file=" + file.getAbsolutePath());
-      reader = new BufferedInputStream(new FileInputStream(file));
-      final Props outputProps = new Props();
-      final String content = Streams.asString(reader).trim();
 
-      if (!content.isEmpty()) {
-        final Map<String, Object> propMap =
-            (Map<String, Object>) JSONUtils.parseJSONFromString(content);
-
-        for (final Map.Entry<String, Object> entry : propMap.entrySet()) {
-          outputProps.put(entry.getKey(), entry.getValue().toString());
-        }
-      }
-      return outputProps;
-    } catch (final FileNotFoundException e) {
-      log.info(
-          String.format("File[%s] wasn't found, returning empty props.", file)
-      );
-      return new Props();
-    } catch (final Exception e) {
-      log.error(
-          "Exception thrown when trying to load output file props.  Returning empty Props instead of failing. Is this really the best thing to do?",
-          e);
-      return new Props();
-    } finally {
-      IOUtils.closeQuietly(reader);
-    }
-  }
-
-  /**
-   * Create Temp File in a working directory
-   *
-   * @param prefix file prefix
-   * @param suffix file suffix
-   * @param workingDir working directory
-   * @return File handle
-   */
-  public static File createOutputPropsFile(final String prefix,
-      final String suffix, final String workingDir) {
-    try {
-      final File directory = new File(workingDir);
-      final File tempFile = File.createTempFile(prefix, suffix, directory);
-      return tempFile;
-    } catch (final IOException e) {
-      throw new RuntimeException("Failed to create temp output property file ", e);
-    }
-  }
-
-  /**
-   * Hard link files and recurse into directories.
-   */
-  public static int createDeepHardlink(final File sourceDir, final File destDir)
+  public static void createDeepHardlink(final File sourceDir, final File destDir)
       throws IOException {
     if (!sourceDir.exists()) {
       throw new IOException("Source directory " + sourceDir.getPath()
@@ -219,23 +105,51 @@ public class FileIOUtils {
     final Set<String> paths = new HashSet<>();
     createDirsFindFiles(sourceDir, sourceDir, destDir, paths);
 
-    int linkCount = 0;
+    final StringBuffer buffer = new StringBuffer();
     for (String path : paths) {
       final File sourceLink = new File(sourceDir, path);
-      path = destDir + path;
+      path = "." + path;
 
-      final File[] targetFiles = sourceLink.listFiles();
-      for (final File targetFile : targetFiles) {
-        if (targetFile.isFile()) {
-          final File linkFile = new File(path, targetFile.getName());
-          // NOTE!! If modifying this, you must run this ignored test manually to validate:
-          // FileIOUtilsTest#testHardlinkCopyOfBigDir
-          Files.createLink(linkFile.toPath(), Paths.get(targetFile.getAbsolutePath()));
-          linkCount++;
-        }
-      }
+      buffer.append("ln ").append(sourceLink.getAbsolutePath()).append("/*")
+          .append(" ").append(path).append(";");
     }
-    return linkCount;
+
+    runShellCommand(buffer.toString(), destDir);
+  }
+
+  private static void runShellCommand(final String command, final File workingDir)
+      throws IOException {
+    final ProcessBuilder builder = new ProcessBuilder().command("sh", "-c", command);
+    builder.directory(workingDir);
+
+    // XXX what about stopping threads ??
+    final Process process = builder.start();
+    try {
+      final NullLogger errorLogger = new NullLogger(process.getErrorStream());
+      final NullLogger inputLogger = new NullLogger(process.getInputStream());
+      errorLogger.start();
+      inputLogger.start();
+
+      try {
+        if (process.waitFor() < 0) {
+          // Assume that the error will be in standard out. Otherwise it'll be
+          // in standard in.
+          String errorMessage = errorLogger.getLastMessages();
+          if (errorMessage.isEmpty()) {
+            errorMessage = inputLogger.getLastMessages();
+          }
+
+          throw new IOException(errorMessage);
+        }
+      } catch (final InterruptedException e) {
+        logger.error(e);
+      }
+    } finally {
+      IOUtils.closeQuietly(process.getInputStream());
+      IOUtils.closeQuietly(process.getOutputStream());
+      IOUtils.closeQuietly(process.getErrorStream());
+    }
+
   }
 
   private static void createDirsFindFiles(final File baseDir, final File sourceDir,

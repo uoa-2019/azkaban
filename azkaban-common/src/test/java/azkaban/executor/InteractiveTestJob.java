@@ -22,21 +22,17 @@ import static org.junit.Assert.assertNotNull;
 import azkaban.flow.CommonJobProperties;
 import azkaban.jobExecutor.AbstractProcessJob;
 import azkaban.utils.Props;
-import java.io.File;
 import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.log4j.Logger;
 
 public class InteractiveTestJob extends AbstractProcessJob {
 
-  public static final String JOB_ID_PREFIX = "InteractiveTestJob.jobIdPrefix";
   private static final ConcurrentHashMap<String, InteractiveTestJob> testJobs =
       new ConcurrentHashMap<>();
-  private static volatile boolean quickSuccess = false;
   private Props generatedProperties = new Props();
-  private volatile boolean isWaiting = true;
-  private volatile boolean succeed = true;
-  private boolean ignoreCancel = false;
+  private boolean isWaiting = true;
+  private boolean succeed = true;
 
   public InteractiveTestJob(final String jobId, final Props sysProps, final Props jobProps,
       final Logger log) {
@@ -73,36 +69,23 @@ public class InteractiveTestJob extends AbstractProcessJob {
     }
   }
 
-  public static void setQuickSuccess(final boolean quickSuccess) {
-    InteractiveTestJob.quickSuccess = quickSuccess;
-  }
-
-  public static void resetQuickSuccess() {
-    InteractiveTestJob.quickSuccess = false;
-  }
-
   @Override
   public void run() throws Exception {
-    final File[] propFiles = initPropsFiles();
     final String nestedFlowPath =
         this.getJobProps().get(CommonJobProperties.NESTED_FLOW_PATH);
-    final String jobIdPrefix = this.getJobProps().getString(JOB_ID_PREFIX, null);
+    final String groupName = this.getJobProps().getString("group", null);
     String id = nestedFlowPath == null ? this.getId() : nestedFlowPath;
-    if (jobIdPrefix != null) {
-      id = jobIdPrefix + ":" + id;
+    if (groupName != null) {
+      id = groupName + ":" + id;
     }
     testJobs.put(id, this);
     synchronized (testJobs) {
       testJobs.notifyAll();
     }
-    if (quickSuccess) {
-      return;
-    }
 
-    if (this.getJobProps().getBoolean("fail", false)) {
-      final int passRetry = this.getJobProps().getInt("passRetry", -1);
-      if (passRetry > 0 && passRetry < this.getJobProps().getInt(JOB_ATTEMPT)) {
-        generateProperties(propFiles[1]);
+    if (this.jobProps.getBoolean("fail", false)) {
+      final int passRetry = this.jobProps.getInt("passRetry", -1);
+      if (passRetry > 0 && passRetry < this.jobProps.getInt(JOB_ATTEMPT)) {
         succeedJob();
       } else {
         failJob();
@@ -112,36 +95,27 @@ public class InteractiveTestJob extends AbstractProcessJob {
       throw new RuntimeException("Forced failure of " + getId());
     }
 
-    boolean succeedAfterSleep = this.getJobProps().containsKey("fail");
-
-    final long waitMillis;
-    if (succeedAfterSleep) {
-      waitMillis = this.getJobProps().getInt("seconds", 10) * 1000L;
-    } else {
-      // this means that job should not exit without external interaction, so exact wait time
-      // doesn't matter. have some non-zero value to avoid busy-looping.
-      waitMillis = 10_000L;
-    }
-
     while (this.isWaiting) {
       synchronized (this) {
+        final int waitMillis = this.jobProps.getInt("seconds", 5) * 1000;
         if (waitMillis > 0) {
           try {
             wait(waitMillis);
           } catch (final InterruptedException e) {
           }
         }
-        if (succeedAfterSleep) {
-          generateProperties(propFiles[1]);
+        if (this.jobProps.containsKey("fail")) {
           succeedJob();
         }
-      }
-    }
 
-    if (!this.succeed) {
-      throw new RuntimeException("Forced failure of " + getId());
-    } else {
-      info("Job " + getId() + " succeeded.");
+        if (!this.isWaiting) {
+          if (!this.succeed) {
+            throw new RuntimeException("Forced failure of " + getId());
+          } else {
+            info("Job " + getId() + " succeeded.");
+          }
+        }
+      }
     }
   }
 
@@ -170,22 +144,14 @@ public class InteractiveTestJob extends AbstractProcessJob {
     }
   }
 
-  public void ignoreCancel() {
-    synchronized (this) {
-      this.ignoreCancel = true;
-    }
-  }
-
   @Override
   public Props getJobGeneratedProperties() {
     return this.generatedProperties;
   }
 
   @Override
-  public void cancel() {
+  public void cancel() throws InterruptedException {
     info("Killing job");
-    if (!this.ignoreCancel) {
-      failJob();
-    }
+    failJob();
   }
 }

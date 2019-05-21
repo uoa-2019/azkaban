@@ -24,7 +24,7 @@ import static azkaban.storage.StorageImplementationType.DATABASE;
 
 import azkaban.storage.StorageImplementationType;
 import azkaban.utils.Props;
-import javax.inject.Inject;
+import com.google.inject.Inject;
 import java.net.URI;
 import org.apache.log4j.Logger;
 

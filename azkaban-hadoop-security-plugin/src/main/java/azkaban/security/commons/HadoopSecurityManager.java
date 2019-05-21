@@ -72,6 +72,9 @@ public abstract class HadoopSecurityManager {
   public abstract FileSystem getFSAsUser(String user)
       throws HadoopSecurityManagerException;
 
+  public abstract void prefetchToken(File tokenFile, String userToProxy,
+      Logger logger) throws HadoopSecurityManagerException;
+
   public abstract void cancelTokens(File tokenFile, String userToProxy,
       Logger logger) throws HadoopSecurityManagerException;
 

@@ -21,7 +21,6 @@ import azkaban.user.Permission;
 import azkaban.user.Permission.Type;
 import azkaban.user.User;
 import azkaban.utils.Pair;
-import com.google.common.collect.ImmutableMap;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -47,7 +46,7 @@ public class Project {
   private long lastModifiedTimestamp;
   private String lastModifiedUser;
   private String source;
-  private Map<String, Flow> flows = new HashMap<>();
+  private Map<String, Flow> flows = null;
   private Map<String, Object> metadata = new HashMap<>();
 
   public Project(final int id, final String name) {
@@ -129,7 +128,7 @@ public class Project {
   }
 
   public void setFlows(final Map<String, Flow> flows) {
-    this.flows = ImmutableMap.copyOf(flows);
+    this.flows = flows;
   }
 
   public Permission getCollectivePermission(final User user) {

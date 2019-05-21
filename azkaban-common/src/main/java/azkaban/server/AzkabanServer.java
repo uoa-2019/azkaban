@@ -13,6 +13,7 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 package azkaban.server;
 
 import static azkaban.Constants.DEFAULT_PORT_NUMBER;
@@ -151,4 +152,5 @@ public abstract class AzkabanServer {
   public abstract VelocityEngine getVelocityEngine();
 
   public abstract UserManager getUserManager();
+
 }

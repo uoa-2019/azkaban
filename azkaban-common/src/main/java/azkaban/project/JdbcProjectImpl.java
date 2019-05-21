@@ -24,13 +24,11 @@ import static azkaban.project.JdbcProjectHandlerSet.ProjectPropertiesResultsHand
 import static azkaban.project.JdbcProjectHandlerSet.ProjectResultHandler;
 import static azkaban.project.JdbcProjectHandlerSet.ProjectVersionResultHandler;
 
-import azkaban.Constants.ConfigurationKeys;
+import azkaban.database.EncodingType;
 import azkaban.db.DatabaseOperator;
 import azkaban.db.DatabaseTransOperator;
-import azkaban.db.EncodingType;
 import azkaban.db.SQLTransaction;
 import azkaban.flow.Flow;
-import azkaban.project.JdbcProjectHandlerSet.FlowFileResultHandler;
 import azkaban.project.ProjectLogEvent.EventType;
 import azkaban.user.Permission;
 import azkaban.user.User;
@@ -42,6 +40,8 @@ import azkaban.utils.Props;
 import azkaban.utils.PropsUtils;
 import azkaban.utils.Triple;
 import com.google.common.io.Files;
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
@@ -54,9 +54,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 
@@ -72,8 +69,6 @@ public class JdbcProjectImpl implements ProjectLoader {
   private static final Logger logger = Logger.getLogger(JdbcProjectImpl.class);
 
   private static final int CHUCK_SIZE = 1024 * 1024 * 10;
-  // Flow yaml files are usually small, set size limitation to 10 MB should be sufficient for now.
-  private static final int MAX_FLOW_FILE_SIZE_IN_BYTES = 1024 * 1024 * 10;
   private final DatabaseOperator dbOperator;
   private final File tempDir;
   private final EncodingType defaultEncodingType = EncodingType.GZIP;
@@ -106,8 +101,8 @@ public class JdbcProjectImpl implements ProjectLoader {
         }
       });
     } catch (final SQLException ex) {
-      logger.error(ProjectResultHandler.SELECT_ALL_ACTIVE_PROJECTS + " failed.", ex);
-      throw new ProjectManagerException("Error retrieving all active projects", ex);
+      logger.error(ProjectResultHandler.SELECT_PROJECT_BY_ID + " failed.", ex);
+      throw new ProjectManagerException("Error retrieving all projects", ex);
     }
     return projects;
   }
@@ -155,12 +150,17 @@ public class JdbcProjectImpl implements ProjectLoader {
     Project project = null;
     final ProjectResultHandler handler = new ProjectResultHandler();
 
+    // select active project from db first, if not exist, select inactive one.
     // At most one active project with the same name exists in db.
     try {
-      final List<Project> projects = this.dbOperator
+      List<Project> projects = this.dbOperator
           .query(ProjectResultHandler.SELECT_ACTIVE_PROJECT_BY_NAME, handler, name);
       if (projects.isEmpty()) {
-        return null;
+        projects = this.dbOperator
+            .query(ProjectResultHandler.SELECT_PROJECT_BY_NAME, handler, name);
+        if (projects.isEmpty()) {
+          throw new ProjectManagerException("No project with name " + name + " exists in db.");
+        }
       }
       project = projects.get(0);
       for (final Triple<String, Boolean, Permission> perm : fetchPermissionsForProject(project)) {
@@ -466,13 +466,6 @@ public class JdbcProjectImpl implements ProjectLoader {
       return null;
     }
     final int numChunks = projHandler.getNumChunks();
-    if (numChunks <= 0) {
-      throw new ProjectManagerException(String.format("Got numChunks=%s for version %s of project "
-              + "%s - seems like this version has been cleaned up already, because enough newer "
-              + "versions have been uploaded. To increase the retention of project versions, set "
-              + "%s", numChunks, version, projectId,
-          ConfigurationKeys.PROJECT_VERSION_RETENTION));
-    }
     BufferedOutputStream bStream = null;
     File file;
     try {
@@ -518,7 +511,7 @@ public class JdbcProjectImpl implements ProjectLoader {
     }
 
     // Check md5.
-    final byte[] md5;
+    byte[] md5 = null;
     try {
       md5 = Md5Hasher.md5Hash(file);
     } catch (final IOException e) {
@@ -528,11 +521,7 @@ public class JdbcProjectImpl implements ProjectLoader {
     if (Arrays.equals(projHandler.getMd5Hash(), md5)) {
       logger.info("Md5 Hash is valid");
     } else {
-      throw new ProjectManagerException(
-          String.format("Md5 Hash failed on project %s version %s retrieval of file %s. "
-                  + "Expected hash: %s , got hash: %s",
-              projHandler.getProjectId(), projHandler.getVersion(), file.getAbsolutePath(),
-              Arrays.toString(projHandler.getMd5Hash()), Arrays.toString(md5)));
+      throw new ProjectManagerException("Md5 Hash failed on retrieval of file");
     }
 
     projHandler.setLocalFile(file);
@@ -913,7 +902,7 @@ public class JdbcProjectImpl implements ProjectLoader {
                   propsName);
 
       if (properties == null || properties.isEmpty()) {
-        logger.debug("Project " + projectId + " version " + projectVer + " property " + propsName
+        logger.warn("Project " + projectId + " version " + projectVer + " property " + propsName
             + " is empty.");
         return null;
       }
@@ -955,23 +944,12 @@ public class JdbcProjectImpl implements ProjectLoader {
   }
 
   @Override
-  public void cleanOlderProjectVersion(final int projectId, final int version,
-      final List<Integer> excludedVersions) throws ProjectManagerException {
-
-    // Would use param of type Array from transOperator.getConnection().createArrayOf() but
-    // h2 doesn't support the Array type, so format the filter manually.
-    final String EXCLUDED_VERSIONS_FILTER = excludedVersions.stream()
-        .map(excluded -> " AND version != " + excluded).collect(Collectors.joining());
-    final String VERSION_FILTER = " AND version < ?" + EXCLUDED_VERSIONS_FILTER;
-
-    final String DELETE_FLOW = "DELETE FROM project_flows WHERE project_id=?" + VERSION_FILTER;
-    final String DELETE_PROPERTIES =
-        "DELETE FROM project_properties WHERE project_id=?" + VERSION_FILTER;
-    final String DELETE_PROJECT_FILES =
-        "DELETE FROM project_files WHERE project_id=?" + VERSION_FILTER;
-    final String UPDATE_PROJECT_VERSIONS =
-        "UPDATE project_versions SET num_chunks=0 WHERE project_id=?" + VERSION_FILTER;
-    // Todo jamiesjc: delete flow files
+  public void cleanOlderProjectVersion(final int projectId, final int version)
+      throws ProjectManagerException {
+    final String DELETE_FLOW = "DELETE FROM project_flows WHERE project_id=? AND version<?";
+    final String DELETE_PROPERTIES = "DELETE FROM project_properties WHERE project_id=? AND version<?";
+    final String DELETE_PROJECT_FILES = "DELETE FROM project_files WHERE project_id=? AND version<?";
+    final String UPDATE_PROJECT_VERSIONS = "UPDATE project_versions SET num_chunks=0 WHERE project_id=? AND version<?";
 
     final SQLTransaction<Integer> cleanOlderProjectTransaction = transOperator -> {
       transOperator.update(DELETE_FLOW, projectId, version);
@@ -989,115 +967,5 @@ public class JdbcProjectImpl implements ProjectLoader {
       logger.error("clean older project transaction failed", e);
       throw new ProjectManagerException("clean older project transaction failed", e);
     }
-  }
-
-  @Override
-  public void uploadFlowFile(final int projectId, final int projectVersion, final File flowFile,
-      final int flowVersion) throws ProjectManagerException {
-    logger.info(String
-        .format(
-            "Uploading flow file %s, version %d for project %d, version %d, file length is [%d bytes]",
-            flowFile.getName(), flowVersion, projectId, projectVersion, flowFile.length()));
-
-    if (flowFile.length() > MAX_FLOW_FILE_SIZE_IN_BYTES) {
-      throw new ProjectManagerException("Flow file length exceeds 10 MB limit.");
-    }
-
-    final byte[] buffer = new byte[MAX_FLOW_FILE_SIZE_IN_BYTES];
-    final String INSERT_FLOW_FILES =
-        "INSERT INTO project_flow_files (project_id, project_version, flow_name, flow_version, "
-            + "modified_time, "
-            + "flow_file) values (?,?,?,?,?,?)";
-
-    try (final FileInputStream input = new FileInputStream(flowFile);
-        final BufferedInputStream bufferedStream = new BufferedInputStream(input)) {
-      final int size = bufferedStream.read(buffer);
-      logger.info("Read bytes for " + flowFile.getName() + ", size:" + size);
-      final byte[] buf = Arrays.copyOfRange(buffer, 0, size);
-      try {
-        this.dbOperator
-            .update(INSERT_FLOW_FILES, projectId, projectVersion, flowFile.getName(), flowVersion,
-                System.currentTimeMillis(), buf);
-      } catch (final SQLException e) {
-        throw new ProjectManagerException(
-            "Error uploading flow file " + flowFile.getName() + ", version " + flowVersion + ".",
-            e);
-      }
-    } catch (final IOException e) {
-      throw new ProjectManagerException(
-          String.format(
-              "Error reading flow file %s, version: %d, length: [%d bytes].",
-              flowFile.getName(), flowVersion, flowFile.length()));
-    }
-  }
-
-  @Override
-  public File getUploadedFlowFile(final int projectId, final int projectVersion,
-      final String flowFileName, final int flowVersion, final File tempDir)
-      throws ProjectManagerException, IOException {
-    final FlowFileResultHandler handler = new FlowFileResultHandler();
-
-    final List<byte[]> data;
-    // Created separate temp directory for each flow file to avoid overwriting the same file by
-    // multiple threads concurrently. Flow file name will be interpret as the flow name when
-    // parsing the yaml flow file, so it has to be specific.
-    final File file = new File(tempDir, flowFileName);
-    try (final FileOutputStream output = new FileOutputStream(file);
-        final BufferedOutputStream bufferedStream = new BufferedOutputStream(output)) {
-      try {
-        data = this.dbOperator
-            .query(FlowFileResultHandler.SELECT_FLOW_FILE, handler,
-                projectId, projectVersion, flowFileName, flowVersion);
-      } catch (final SQLException e) {
-        throw new ProjectManagerException(
-            "Failed to query uploaded flow file for project " + projectId + " version "
-                + projectVersion + ", flow file " + flowFileName + " version " + flowVersion, e);
-      }
-
-      if (data == null || data.isEmpty()) {
-        throw new ProjectManagerException(
-            "No flow file could be found in DB table for project " + projectId + " version " +
-                projectVersion + ", flow file " + flowFileName + " version " + flowVersion);
-      }
-      bufferedStream.write(data.get(0));
-    } catch (final IOException e) {
-      throw new ProjectManagerException(
-          "Error writing to output stream for project " + projectId + " version " + projectVersion
-              + ", flow file " + flowFileName + " version " + flowVersion, e);
-    }
-    return file;
-  }
-
-  @Override
-  public int getLatestFlowVersion(final int projectId, final int projectVersion,
-      final String flowName) throws ProjectManagerException {
-    final IntHandler handler = new IntHandler();
-    try {
-      return this.dbOperator.query(IntHandler.SELECT_LATEST_FLOW_VERSION, handler, projectId,
-          projectVersion, flowName);
-    } catch (final SQLException e) {
-      logger.error(e);
-      throw new ProjectManagerException(
-          "Error selecting latest flow version from project " + projectId + ", version " +
-              projectVersion + ", flow " + flowName + ".", e);
-    }
-  }
-
-  @Override
-  public boolean isFlowFileUploaded(final int projectId, final int projectVersion)
-      throws ProjectManagerException {
-    final FlowFileResultHandler handler = new FlowFileResultHandler();
-    final List<byte[]> data;
-
-    try {
-      data = this.dbOperator
-          .query(FlowFileResultHandler.SELECT_ALL_FLOW_FILES, handler,
-              projectId, projectVersion);
-    } catch (final SQLException e) {
-      logger.error(e);
-      throw new ProjectManagerException("Failed to query uploaded flow files ", e);
-    }
-
-    return !data.isEmpty();
   }
 }

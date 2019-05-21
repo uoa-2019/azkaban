@@ -23,7 +23,7 @@ import azkaban.trigger.builtin.BasicTimeChecker;
 import azkaban.trigger.builtin.ExecuteFlowAction;
 import azkaban.utils.JSONUtils;
 import azkaban.utils.Props;
-import azkaban.utils.TimeUtils;
+import azkaban.utils.Utils;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -55,7 +55,7 @@ public class TriggerTest {
     final DateTime now = DateTime.now();
     final ConditionChecker checker1 =
         new BasicTimeChecker("timeChecker1", now.getMillis(), now.getZone(),
-            true, true, TimeUtils.parsePeriodString("1h"), null);
+            true, true, Utils.parsePeriodString("1h"), null);
     final Map<String, ConditionChecker> checkers1 =
         new HashMap<>();
     checkers1.put(checker1.getId(), checker1);
@@ -65,7 +65,7 @@ public class TriggerTest {
     final List<TriggerAction> actions = new ArrayList<>();
     final TriggerAction action =
         new ExecuteFlowAction("executeAction", 1, "testProj", "testFlow",
-            "azkaban", new ExecutionOptions());
+            "azkaban", new ExecutionOptions(), null);
     actions.add(action);
 
     final Trigger t = new Trigger.TriggerBuilder("azkaban",

@@ -18,7 +18,6 @@ package azkaban.trigger;
 
 import static org.junit.Assert.assertTrue;
 
-import azkaban.executor.DisabledJob;
 import azkaban.executor.ExecutionOptions;
 import azkaban.trigger.builtin.ExecuteFlowAction;
 import azkaban.utils.Props;
@@ -36,12 +35,12 @@ public class ExecuteFlowActionTest {
     loader.init(new Props());
 
     final ExecutionOptions options = new ExecutionOptions();
-    final List<DisabledJob> disabledJobs = new ArrayList<>();
+    final List<Object> disabledJobs = new ArrayList<>();
     options.setDisabledJobs(disabledJobs);
 
     final ExecuteFlowAction executeFlowAction =
         new ExecuteFlowAction("ExecuteFlowAction", 1, "testproject",
-            "testflow", "azkaban", options);
+            "testflow", "azkaban", options, null);
 
     final Object obj = executeFlowAction.toJson();
 

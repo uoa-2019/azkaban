@@ -13,17 +13,17 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 package azkaban.webapp.servlet;
 
 import static azkaban.ServiceProvider.SERVICE_PROVIDER;
 
-import azkaban.Constants.ConfigurationKeys;
 import azkaban.server.AzkabanServer;
 import azkaban.server.HttpRequestUtils;
 import azkaban.server.session.Session;
 import azkaban.utils.JSONUtils;
 import azkaban.utils.Props;
-import azkaban.utils.TimeUtils;
+import azkaban.utils.WebUtils;
 import azkaban.webapp.AzkabanWebServer;
 import azkaban.webapp.plugin.PluginRegistry;
 import azkaban.webapp.plugin.TriggerPlugin;
@@ -50,6 +50,7 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
   public static final String JSON_MIME_TYPE = "application/json";
   public static final String jarVersion = AbstractAzkabanServlet.class.getPackage()
       .getImplementationVersion();
+  protected static final WebUtils utils = new WebUtils();
   private static final String AZKABAN_SUCCESS_MESSAGE =
       "azkaban.success.message";
   private static final String AZKABAN_WARN_MESSAGE =
@@ -66,8 +67,6 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
 
   private List<ViewerPlugin> viewerPlugins;
   private List<TriggerPlugin> triggerPlugins;
-
-  private int displayExecutionPageSize;
 
   public static String createJsonResponse(final String status, final String message,
       final String action, final Map<String, Object> params) {
@@ -107,7 +106,6 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
     this.label = props.getString("azkaban.label", "");
     this.color = props.getString("azkaban.color", "#FF0000");
     this.passwordPlaceholder = props.getString("azkaban.password.placeholder", "Password");
-    this.displayExecutionPageSize = props.getInt(ConfigurationKeys.DISPLAY_EXECUTION_PAGE_SIZE, 16);
 
     if (this.application instanceof AzkabanWebServer) {
       final AzkabanWebServer server = (AzkabanWebServer) this.application;
@@ -289,16 +287,13 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
     page.add("note_type", NoteServlet.type);
     page.add("note_message", NoteServlet.message);
     page.add("note_url", NoteServlet.url);
+    page.add("utils", utils);
     page.add("timezone", TimeZone.getDefault().getID());
     page.add("currentTime", (new DateTime()).getMillis());
-    page.add("size", getDisplayExecutionPageSize());
-    page.add("System", System.class);
-    page.add("TimeUtils", TimeUtils.class);
-    page.add("WebUtils", WebUtils.class);
-
     if (session != null && session.getUser() != null) {
       page.add("user_id", session.getUser().getUserId());
     }
+    page.add("context", req.getContextPath());
 
     final String errorMsg = getErrorMessageFromCookie(req);
     page.add("error_message", errorMsg == null || errorMsg.isEmpty() ? "null"
@@ -343,7 +338,7 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
     page.add("note_url", NoteServlet.url);
     page.add("timezone", TimeZone.getDefault().getID());
     page.add("currentTime", (new DateTime()).getMillis());
-    page.add("size", getDisplayExecutionPageSize());
+    page.add("context", req.getContextPath());
 
     // @TODO, allow more than one type of viewer. For time sake, I only install
     // the first one
@@ -373,9 +368,5 @@ public abstract class AbstractAzkabanServlet extends HttpServlet {
       throws IOException {
     resp.setContentType(JSON_MIME_TYPE);
     JSONUtils.toJSON(obj, resp.getOutputStream(), true);
-  }
-
-  protected int getDisplayExecutionPageSize() {
-    return this.displayExecutionPageSize;
   }
 }

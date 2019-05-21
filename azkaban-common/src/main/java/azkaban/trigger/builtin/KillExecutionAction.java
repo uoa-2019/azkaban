@@ -38,7 +38,7 @@ public class KillExecutionAction implements TriggerAction {
 
   private static final Logger logger = Logger
       .getLogger(KillExecutionAction.class);
-  private static ExecutorManagerAdapter executorManagerAdapter;
+  private static ExecutorManagerAdapter executorManager;
   private final String actionId;
   private final int execId;
 
@@ -49,7 +49,7 @@ public class KillExecutionAction implements TriggerAction {
   }
 
   public static void setExecutorManager(final ExecutorManagerAdapter em) {
-    executorManagerAdapter = em;
+    executorManager = em;
   }
 
   public static KillExecutionAction createFromJson(final Object obj) {
@@ -94,11 +94,11 @@ public class KillExecutionAction implements TriggerAction {
 
   @Override
   public void doAction() throws Exception {
-    final ExecutableFlow exFlow = executorManagerAdapter.getExecutableFlow(this.execId);
+    final ExecutableFlow exFlow = executorManager.getExecutableFlow(this.execId);
     logger.info("ready to kill execution " + this.execId);
     if (!Status.isStatusFinished(exFlow.getStatus())) {
       logger.info("Killing execution " + this.execId);
-      executorManagerAdapter.cancelFlow(exFlow, Constants.AZKABAN_SLA_CHECKER_USERNAME);
+      executorManager.cancelFlow(exFlow, Constants.AZKABAN_SLA_CHECKER_USERNAME);
     }
   }
 

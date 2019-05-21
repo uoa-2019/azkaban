@@ -16,7 +16,6 @@
 
 package azkaban.server;
 
-import azkaban.executor.DisabledJob;
 import azkaban.executor.ExecutionOptions;
 import azkaban.executor.ExecutionOptions.FailureAction;
 import azkaban.executor.ExecutorManagerException;
@@ -108,10 +107,8 @@ public class HttpRequestUtils {
     if (hasParam(req, "disabled")) {
       final String disabled = getParam(req, "disabled");
       if (!disabled.isEmpty()) {
-        // TODO edlu: see if it's possible to pass in the new format
-        final List<DisabledJob> disabledList =
-            DisabledJob.fromDeprecatedObjectList((List < Object >) JSONUtils
-                .parseJSONFromStringQuiet(disabled));
+        final List<Object> disabledList =
+            (List<Object>) JSONUtils.parseJSONFromStringQuiet(disabled);
         execOptions.setDisabledJobs(disabledList);
       }
     }

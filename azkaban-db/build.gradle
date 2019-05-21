@@ -30,20 +30,18 @@ artifacts {
 }
 
 dependencies {
-    compile project(':az-core')
 
     // todo kunkun-tang: consolidate dependencies in azkaban-common and azkaban-db
     compile deps.dbutils
     compile deps.dbcp2
     compile deps.io
 
-    testCompile project(path: ':az-core', configuration: 'testOutput')
     testRuntime deps.h2
 }
 
 /**
  * concat task
- * Concatenate all the sql queries / files (except upgrade.*.sql) and collect it into a single
+ * Concatenate all the sql queries / files (except update.*.sql) and collect it into a single
  * SQL file.
  */
 task concat() {
@@ -53,7 +51,6 @@ task concat() {
             logger.info('Concating create scripts to ' + destFile)
             fileset(dir: 'src/main/sql') {
                 exclude(name: 'database.properties')
-                exclude(name: 'upgrade.*.sql')
             }
         }
     }

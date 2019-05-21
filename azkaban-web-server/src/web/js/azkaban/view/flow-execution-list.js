@@ -35,6 +35,7 @@ azkaban.ExecutionListView = Backbone.View.extend({
 
   renderJobs: function (evt) {
     var data = this.model.get("data");
+    var lastTime = data.endTime == -1 ? (new Date()).getTime() : data.endTime;
     var executingBody = $("#executableBody");
     this.updateJobRow(data.nodes, executingBody);
 
@@ -42,8 +43,6 @@ azkaban.ExecutionListView = Backbone.View.extend({
         : data.endTime;
     var flowStartTime = data.startTime;
     this.updateProgressBar(data, flowStartTime, flowLastTime);
-
-    this.expandFailedOrKilledJobs(data.nodes);
   },
 
 //
@@ -68,11 +67,13 @@ azkaban.ExecutionListView = Backbone.View.extend({
 
   updateJobs: function (evt) {
     var update = this.model.get("update");
+    var lastTime = update.endTime == -1
+        ? (new Date()).getTime()
+        : update.endTime;
     var executingBody = $("#executableBody");
 
     if (update.nodes) {
       this.updateJobRow(update.nodes, executingBody);
-      this.expandFailedOrKilledJobs(update.nodes);
     }
 
     var data = this.model.get("data");
@@ -94,10 +95,9 @@ azkaban.ExecutionListView = Backbone.View.extend({
     for (var i = 0; i < nodes.length; ++i) {
       var node = nodes[i].changedNode ? nodes[i].changedNode : nodes[i];
 
-      if (node.status == 'READY') {
+      if (node.startTime < 0) {
         continue;
       }
-
       //var nodeId = node.id.replace(".", "\\\\.");
       var row = node.joblistrow;
       if (!row) {
@@ -110,13 +110,8 @@ azkaban.ExecutionListView = Backbone.View.extend({
       $(statusDiv).attr("class", "status " + node.status);
 
       var startTimeTd = $(row).find("> td.startTime");
-      if (node.startTime == -1) {
-        $(startTimeTd).text("-");
-      }
-      else {
-        var startdate = new Date(node.startTime);
-        $(startTimeTd).text(getDateFormat(startdate));
-      }
+      var startdate = new Date(node.startTime);
+      $(startTimeTd).text(getDateFormat(startdate));
 
       var endTimeTd = $(row).find("> td.endTime");
       if (node.endTime == -1) {
@@ -178,6 +173,10 @@ azkaban.ExecutionListView = Backbone.View.extend({
   },
 
   updateProgressBar: function (data, flowStartTime, flowLastTime) {
+    if (data.startTime == -1) {
+      return;
+    }
+
     var outerWidth = $(".flow-progress").css("width");
     if (outerWidth) {
       if (outerWidth.substring(outerWidth.length - 2, outerWidth.length)
@@ -244,13 +243,10 @@ azkaban.ExecutionListView = Backbone.View.extend({
 
       var nodeLastTime = node.endTime == -1 ? (new Date()).getTime()
           : node.endTime;
-      var nodeStartTime = node.startTime == -1 ? (new Date()).getTime()
-          : node.startTime;
-      var left = Math.max((nodeStartTime - parentStartTime) * factor,
+      var left = Math.max((node.startTime - parentStartTime) * factor,
           minOffset);
       var margin = left - offsetLeft;
-      var width = Math.max((nodeLastTime - nodeStartTime) * factor, 3);
-
+      var width = Math.max((nodeLastTime - node.startTime) * factor, 3);
       width = Math.min(width, outerWidth);
 
       progressBar.css("margin-left", left)
@@ -265,54 +261,26 @@ azkaban.ExecutionListView = Backbone.View.extend({
     }
   },
 
-  /**
-   * Expands or collapses a flow node according to the value of the expand
-   * parameter.
-   *
-   * @param flow - node to expand/collapse
-   * @param expand - if value true -> expand, false: collapse,
-   *                 undefined -> toggles node status
-   */
-  setFlowExpansion: function (flow, expand) {
+  toggleExpandFlow: function (flow) {
+    console.log("Toggle Expand");
     var tr = flow.joblistrow;
     var subFlowRow = tr.subflowrow;
     var expandIcon = $(tr).find("> td > .listExpand");
+    if (tr.expanded) {
+      tr.expanded = false;
+      $(expandIcon).removeClass("glyphicon-chevron-up");
+      $(expandIcon).addClass("glyphicon-chevron-down");
 
-    var needsExpansion = !tr.expanded && (expand === undefined || expand);
-    var needsCollapsing = tr.expanded && (expand === undefined || !expand);
-
-    if (needsExpansion) {
+      $(tr).removeClass("expanded");
+      $(subFlowRow).hide();
+    }
+    else {
       tr.expanded = true;
       $(expandIcon).addClass("glyphicon-chevron-up");
       $(expandIcon).removeClass("glyphicon-chevron-down");
       $(tr).addClass("expanded");
       $(subFlowRow).show();
-
-    } else if (needsCollapsing) {
-      tr.expanded = false;
-      $(expandIcon).removeClass("glyphicon-chevron-up");
-      $(expandIcon).addClass("glyphicon-chevron-down");
-      $(tr).removeClass("expanded");
-      $(subFlowRow).hide();
-    } // else do nothing
-  },
-
-  expandFailedOrKilledJobs: function (nodes) {
-    var hasFailedOrKilled = false;
-    for (var i = 0; i < nodes.length; ++i) {
-      var node = nodes[i].changedNode ? nodes[i].changedNode : nodes[i];
-
-      if (node.type === "flow") {
-        if (this.expandFailedOrKilledJobs(node.nodes || [])) {
-          hasFailedOrKilled = true;
-          this.setFlowExpansion(node, true);
-        }
-
-      } else if (node.status === "FAILED" || node.status === "KILLED") {
-        hasFailedOrKilled = true;
-      }
     }
-    return hasFailedOrKilled;
   },
 
   addNodeRow: function (node, body) {
@@ -379,7 +347,7 @@ azkaban.ExecutionListView = Backbone.View.extend({
       $(expandIcon).addClass("expandarrow glyphicon glyphicon-chevron-down");
       $(expandIcon).click(function (evt) {
         var parent = $(evt.currentTarget).parents("tr")[0];
-        self.setFlowExpansion(parent.node);
+        self.toggleExpandFlow(parent.node);
       });
     }
 
@@ -398,7 +366,7 @@ azkaban.ExecutionListView = Backbone.View.extend({
       var a = document.createElement("a");
       $(a).attr("href", logURL);
       //$(a).attr("id", node.id + "-log-link");
-      $(a).text("Log");
+      $(a).text("Details");
       $(tdDetails).append(a);
     }
 
@@ -437,13 +405,13 @@ var attemptRightClick = function (event) {
   var menu = [
     {
       title: "Open Attempt Log...", callback: function () {
-        window.location.href = requestURL;
-      }
+      window.location.href = requestURL;
+    }
     },
     {
       title: "Open Attempt Log in New Window...", callback: function () {
-        window.open(requestURL);
-      }
+      window.open(requestURL);
+    }
     }
   ];
 

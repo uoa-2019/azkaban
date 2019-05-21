@@ -25,7 +25,6 @@ public enum Status {
   RUNNING(30),
   PAUSED(40),
   SUCCEEDED(50),
-  KILLING(55),
   KILLED(60),
   FAILED(70),
   FAILED_FINISHING(80),
@@ -68,28 +67,6 @@ public enum Status {
       case RUNNING:
       case FAILED_FINISHING:
       case QUEUED:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  public static boolean isStatusFailed(final Status status) {
-    switch (status) {
-      case FAILED:
-      case KILLED:
-      case CANCELLED:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  public static boolean isStatusSucceeded(final Status status) {
-    switch (status) {
-      case SUCCEEDED:
-      case FAILED_SUCCEEDED:
-      case SKIPPED:
         return true;
       default:
         return false;
