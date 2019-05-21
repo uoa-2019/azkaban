@@ -122,7 +122,12 @@ public class AzkabanProcess {
       errorGobbler.awaitCompletion(5000);
 
       if (exitCode != 0) {
-        throw new ProcessFailureException(exitCode);
+        final String output =
+            new StringBuilder().append("Stdout:\n")
+                .append(outputGobbler.getRecentLog()).append("\n\n")
+                .append("Stderr:\n").append(errorGobbler.getRecentLog())
+                .append("\n").toString();
+        throw new ProcessFailureException(exitCode, output);
       }
 
     } finally {

@@ -24,7 +24,8 @@ import azkaban.trigger.ConditionChecker;
 import azkaban.trigger.TriggerAction;
 import azkaban.trigger.builtin.SlaAlertAction;
 import azkaban.trigger.builtin.SlaChecker;
-import java.time.Duration;
+import azkaban.utils.Utils;
+import com.google.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -32,12 +33,10 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import org.apache.log4j.Logger;
+import org.joda.time.ReadablePeriod;
 
 
-@Singleton
 public class TriggerManager {
 
   private static final int SCHEDULED_THREAD_POOL_SIZE = 4;
@@ -59,24 +58,26 @@ public class TriggerManager {
 
   private List<TriggerAction> createActions(final SlaOption sla, final int execId) {
     final List<TriggerAction> actions = new ArrayList<>();
-    if (sla.hasAlert()) {
-      TriggerAction action = new SlaAlertAction(SlaOption.ACTION_ALERT, sla, execId);
-    }
-
-    if (sla.hasAlert()) {
-      actions.add(new SlaAlertAction(SlaOption.ACTION_ALERT, sla, execId));
-    }
-    if(sla.hasKill()) {
-      switch(sla.getType().getComponent()) {
-        case FLOW:
-         actions.add(new KillExecutionAction(SlaOption.ACTION_CANCEL_FLOW, execId));
-         break;
-        case JOB:
-        actions.add(new KillJobAction(SlaOption.ACTION_KILL_JOB, execId, sla.getJobName()));
+    final List<String> slaActions = sla.getActions();
+    for (final String act : slaActions) {
+      TriggerAction action = null;
+      switch (act) {
+        case SlaOption.ACTION_ALERT:
+          action = new SlaAlertAction(SlaOption.ACTION_ALERT, sla, execId);
+          break;
+        case SlaOption.ACTION_CANCEL_FLOW:
+          action = new KillExecutionAction(SlaOption.ACTION_CANCEL_FLOW, execId);
+          break;
+        case SlaOption.ACTION_KILL_JOB:
+          final String jobId = (String) sla.getInfo().get(SlaOption.INFO_JOB_NAME);
+          action = new KillJobAction(SlaOption.ACTION_KILL_JOB, execId, jobId);
           break;
         default:
-          logger.info("Unknown action type " + sla.getType().getComponent());
+          logger.info("Unknown action type " + act);
           break;
+      }
+      if (action != null) {
+        actions.add(action);
       }
     }
     return actions;
@@ -84,20 +85,19 @@ public class TriggerManager {
 
   @SuppressWarnings("FutureReturnValueIgnored")
   public void addTrigger(final int execId, final List<SlaOption> slaOptions) {
-    for (final SlaOption slaOption : slaOptions) {
-      final Condition triggerCond = createCondition(slaOption, execId, "slaFailChecker",
-          "isSlaFailed()");
+    for (final SlaOption sla : slaOptions) {
+      final Condition triggerCond = createCondition(sla, execId, "slaFailChecker", "isSlaFailed()");
 
       // if whole flow finish before violating sla, just expire the checker
-      final Condition expireCond = createCondition(slaOption, execId, "slaPassChecker", "isSlaPassed"
-          + "()");
+      final Condition expireCond = createCondition(sla, execId, "slaPassChecker", "isSlaPassed()");
 
-      final List<TriggerAction> actions = createActions(slaOption, execId);
+      final List<TriggerAction> actions = createActions(sla, execId);
       final Trigger trigger = new Trigger(execId, triggerCond, expireCond, actions);
-      final Duration duration = slaOption.getDuration();
-      final long durationInMillis = duration.toMillis();
+      final ReadablePeriod duration = Utils
+          .parsePeriodString((String) sla.getInfo().get(SlaOption.INFO_DURATION));
+      final long durationInMillis = duration.toPeriod().toStandardDuration().getMillis();
 
-      logger.info("Adding sla trigger " + slaOption.toString() + " to execution " + execId
+      logger.info("Adding sla trigger " + sla.toString() + " to execution " + execId
           + ", scheduled to trigger in " + durationInMillis / 1000 + " seconds");
       this.scheduledService.schedule(trigger, durationInMillis, TimeUnit.MILLISECONDS);
     }

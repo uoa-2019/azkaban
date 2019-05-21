@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 LinkedIn Corp.
+ * Copyright 2017 LinkedIn Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -18,7 +18,6 @@ package azkaban.jobExecutor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import azkaban.Constants.JobProperties;
 import azkaban.flow.CommonJobProperties;
 import azkaban.utils.Props;
 import java.io.File;
@@ -84,7 +83,7 @@ public class ProcessJobTest {
 
     // Initialize the Props
     this.props.removeLocal(CommonJobProperties.SUBMIT_USER);
-    this.props.put(JobProperties.USER_TO_PROXY, "test_user");
+    this.props.put("user.to.proxy", "test_user");
     this.props.put(ProcessJob.COMMAND, "ls -al");
 
     this.job.run();
@@ -113,7 +112,7 @@ public class ProcessJobTest {
 
     // Initialize the Props
     this.props.removeLocal(CommonJobProperties.SUBMIT_USER);
-    this.props.put(JobProperties.USER_TO_PROXY, "root");
+    this.props.put("user.to.proxy", "root");
     this.props.put("execute.as.user", "true");
     this.props.put(ProcessJob.COMMAND, "ls -al");
 
@@ -129,7 +128,7 @@ public class ProcessJobTest {
 
     // Initialize the Props
     this.props.removeLocal(CommonJobProperties.SUBMIT_USER);
-    this.props.put(JobProperties.USER_TO_PROXY, "azkaban");
+    this.props.put("user.to.proxy", "azkaban");
     this.props.put("execute.as.user", "true");
     this.props.put(ProcessJob.COMMAND, "ls -al");
 
@@ -185,7 +184,7 @@ public class ProcessJobTest {
     final Props jobProps = new Props();
     jobProps.put("command", "echo hello");
     jobProps.put("working.dir", "/tmp");
-    jobProps.put(JobProperties.USER_TO_PROXY, "test");
+    jobProps.put("user.to.proxy", "test");
     jobProps.put("azkaban.flow.projectname", "test");
     jobProps.put("azkaban.flow.flowid", "test");
     jobProps.put("azkaban.job.id", "test");
@@ -205,13 +204,14 @@ public class ProcessJobTest {
 
   @Test
   public void testCancelAfterJobProcessCreation() throws InterruptedException, ExecutionException {
-    this.props.put(ProcessJob.COMMAND, "sleep 5");
+    this.props.put(ProcessJob.COMMAND, "sleep 1");
 
     final ExecutorService executorService = Executors.newSingleThreadExecutor();
     final Future future = executorService.submit(() -> {
       try {
         this.job.run();
       } catch (final Exception e) {
+        e.printStackTrace();
       }
     });
 

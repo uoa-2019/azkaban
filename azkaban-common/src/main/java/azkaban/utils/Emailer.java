@@ -19,28 +19,20 @@ package azkaban.utils;
 import static java.util.Objects.requireNonNull;
 
 import azkaban.Constants;
-import azkaban.Constants.ConfigurationKeys;
 import azkaban.alert.Alerter;
 import azkaban.executor.ExecutableFlow;
-import azkaban.executor.Executor;
-import azkaban.executor.ExecutorLoader;
-import azkaban.executor.ExecutorManagerException;
+import azkaban.executor.ExecutableNode;
+import azkaban.executor.ExecutionOptions;
+import azkaban.executor.Status;
 import azkaban.executor.mail.DefaultMailCreator;
 import azkaban.executor.mail.MailCreator;
 import azkaban.metrics.CommonMetrics;
 import azkaban.sla.SlaOption;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableListMultimap;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Multimaps;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import javax.mail.internet.AddressException;
-import org.apache.commons.collections.CollectionUtils;
+import javax.mail.MessagingException;
 import org.apache.log4j.Logger;
 
 @Singleton
@@ -53,187 +45,193 @@ public class Emailer extends AbstractMailer implements Alerter {
   private final String scheme;
   private final String clientHostname;
   private final String clientPortNumber;
+  private final String mailHost;
+  private final int mailPort;
+  private final String mailUser;
+  private final String mailPassword;
+  private final String mailSender;
   private final String azkabanName;
-  private final ExecutorLoader executorLoader;
+  private final String tls;
+  private boolean testMode = false;
 
   @Inject
-  public Emailer(final Props props, final CommonMetrics commonMetrics,
-      final EmailMessageCreator messageCreator, final ExecutorLoader executorLoader) {
-    super(props, messageCreator);
-    this.executorLoader = requireNonNull(executorLoader, "executorLoader is null.");
+  public Emailer(final Props props, final CommonMetrics commonMetrics) {
+    super(props);
     this.commonMetrics = requireNonNull(commonMetrics, "commonMetrics is null.");
     this.azkabanName = props.getString("azkaban.name", "azkaban");
+    this.mailHost = props.getString("mail.host", "localhost");
+    this.mailPort = props.getInt("mail.port", DEFAULT_SMTP_PORT);
+    this.mailUser = props.getString("mail.user", "");
+    this.mailPassword = props.getString("mail.password", "");
+    this.mailSender = props.getString("mail.sender", "");
+    this.tls = props.getString("mail.tls", "false");
 
     final int mailTimeout = props.getInt("mail.timeout.millis", 30000);
     EmailMessage.setTimeout(mailTimeout);
-    final int connectionTimeout = props.getInt("mail.connection.timeout.millis", 30000);
+    final int connectionTimeout =
+        props.getInt("mail.connection.timeout.millis", 30000);
     EmailMessage.setConnectionTimeout(connectionTimeout);
 
     EmailMessage.setTotalAttachmentMaxSize(getAttachmentMaxSize());
 
-    this.clientHostname = props.getString(ConfigurationKeys.AZKABAN_WEBSERVER_EXTERNAL_HOSTNAME,
-        props.getString("jetty.hostname", "localhost"));
+    this.clientHostname = props.getString("jetty.hostname", "localhost");
 
     if (props.getBoolean("jetty.use.ssl", true)) {
       this.scheme = HTTPS;
-      this.clientPortNumber = Integer.toString(props
-          .getInt(ConfigurationKeys.AZKABAN_WEBSERVER_EXTERNAL_SSL_PORT,
-              props.getInt("jetty.ssl.port",
-                  Constants.DEFAULT_SSL_PORT_NUMBER)));
+      this.clientPortNumber = Integer.toString(props.getInt("jetty.ssl.port",
+          Constants.DEFAULT_SSL_PORT_NUMBER));
     } else {
       this.scheme = HTTP;
-      this.clientPortNumber = Integer.toString(
-          props.getInt(ConfigurationKeys.AZKABAN_WEBSERVER_EXTERNAL_PORT, props.getInt("jetty.port",
-              Constants.DEFAULT_PORT_NUMBER)));
+      this.clientPortNumber = Integer.toString(props.getInt("jetty.port",
+          Constants.DEFAULT_PORT_NUMBER));
     }
+
+    this.testMode = props.getBoolean("test.mode", false);
   }
 
-  public String getAzkabanURL() {
-    return this.scheme + "://" + this.clientHostname + ":" + this.clientPortNumber;
-  }
-
-  /**
-   * Send an email to the specified email list
-   */
-  public void sendEmail(final List<String> emailList, final String subject, final String body) {
-    if (emailList != null && !emailList.isEmpty()) {
-      final EmailMessage message = super.createEmailMessage(subject, "text/html", emailList);
-      message.setBody(body);
-      sendEmail(message, true, "email message " + body);
+  public static List<String> findFailedJobs(final ExecutableFlow flow) {
+    final ArrayList<String> failedJobs = new ArrayList<>();
+    for (final ExecutableNode node : flow.getExecutableNodes()) {
+      if (node.getStatus() == Status.FAILED) {
+        failedJobs.add(node.getId());
+      }
     }
+    return failedJobs;
   }
 
-  @Override
-  public void alertOnSla(final SlaOption slaOption, final String slaMessage) {
-    final String subject =
-        "SLA violation for " + getJobOrFlowName(slaOption) + " on " + getAzkabanName();
+  private void sendSlaAlertEmail(final SlaOption slaOption, final String slaMessage) {
+    final String subject = "Sla Violation Alert on " + getAzkabanName();
+    final String body = slaMessage;
     final List<String> emailList =
-        (List<String>) slaOption.getEmails();
-    logger.info("Sending SLA email " + slaMessage);
-    sendEmail(emailList, subject, slaMessage);
-  }
+        (List<String>) slaOption.getInfo().get(SlaOption.INFO_EMAIL_LIST);
+    if (emailList != null && !emailList.isEmpty()) {
+      final EmailMessage message =
+          super.createEmailMessage(subject, "text/html", emailList);
 
-  @Override
-  public void alertOnFirstError(final ExecutableFlow flow) {
-    final EmailMessage message = this.messageCreator.createMessage();
-    final MailCreator mailCreator = getMailCreator(flow);
-    final boolean mailCreated = mailCreator.createFirstErrorMessage(flow, message, this.azkabanName,
-        this.scheme, this.clientHostname, this.clientPortNumber);
-    sendEmail(message, mailCreated,
-        "first error email message for execution " + flow.getExecutionId());
-  }
+      message.setBody(body);
 
-  @Override
-  public void alertOnError(final ExecutableFlow flow, final String... extraReasons) {
-    final EmailMessage message = this.messageCreator.createMessage();
-    final MailCreator mailCreator = getMailCreator(flow);
-    List<ExecutableFlow> last72hoursExecutions = new ArrayList<>();
-
-    if (flow.getStartTime() > 0) {
-      final long startTime = flow.getStartTime() - Duration.ofHours(72).toMillis();
-      try {
-        last72hoursExecutions = this.executorLoader.fetchFlowHistory(flow.getProjectId(), flow
-            .getFlowId(), startTime);
-      } catch (final ExecutorManagerException e) {
-        logger.error("unable to fetch past executions", e);
-      }
-    }
-
-    final boolean mailCreated = mailCreator.createErrorEmail(flow, last72hoursExecutions, message,
-        this.azkabanName, this.scheme, this.clientHostname, this.clientPortNumber, extraReasons);
-    sendEmail(message, mailCreated, "error email message for execution " + flow.getExecutionId());
-  }
-
-  @Override
-  public void alertOnSuccess(final ExecutableFlow flow) {
-    final EmailMessage message = this.messageCreator.createMessage();
-    final MailCreator mailCreator = getMailCreator(flow);
-    final boolean mailCreated = mailCreator.createSuccessEmail(flow, message, this.azkabanName,
-        this.scheme, this.clientHostname, this.clientPortNumber);
-    sendEmail(message, mailCreated, "success email message for execution " + flow.getExecutionId());
-  }
-
-  /**
-   * Sends as many emails as there are unique combinations of:
-   *
-   * [mail creator] x [failure email address list]
-   *
-   * Executions with the same combo are grouped into a single message.
-   */
-  @Override
-  public void alertOnFailedUpdate(final Executor executor, List<ExecutableFlow> flows,
-      final ExecutorManagerException updateException) {
-
-    flows = flows.stream()
-        .filter(flow -> flow.getExecutionOptions() != null)
-        .filter(flow -> CollectionUtils.isNotEmpty(flow.getExecutionOptions().getFailureEmails()))
-        .collect(Collectors.toList());
-
-    // group by mail creator in case some flows use different creators
-    final ImmutableListMultimap<String, ExecutableFlow> creatorsToFlows = Multimaps
-        .index(flows, flow -> flow.getExecutionOptions().getMailCreator());
-
-    for (final String mailCreatorName : creatorsToFlows.keySet()) {
-
-      final ImmutableList<ExecutableFlow> creatorFlows = creatorsToFlows.get(mailCreatorName);
-      final MailCreator mailCreator = getMailCreator(mailCreatorName);
-
-      // group by recipients in case some flows have different failure email addresses
-      final ImmutableListMultimap<List<String>, ExecutableFlow> emailsToFlows = Multimaps
-          .index(creatorFlows, flow -> flow.getExecutionOptions().getFailureEmails());
-
-      for (final List<String> emailList : emailsToFlows.keySet()) {
-        sendFailedUpdateEmail(executor, updateException, mailCreator, emailsToFlows.get(emailList));
-      }
-    }
-  }
-
-  /**
-   * Sends a single email about failed updates.
-   */
-  private void sendFailedUpdateEmail(final Executor executor,
-      final ExecutorManagerException exception, final MailCreator mailCreator,
-      final ImmutableList<ExecutableFlow> flows) {
-    final EmailMessage message = this.messageCreator.createMessage();
-    final boolean mailCreated = mailCreator
-        .createFailedUpdateMessage(flows, executor, exception, message,
-            this.azkabanName, this.scheme, this.clientHostname, this.clientPortNumber);
-    final List<Integer> executionIds = Lists.transform(flows, ExecutableFlow::getExecutionId);
-    sendEmail(message, mailCreated, "failed update email message for executions " + executionIds);
-  }
-
-  private MailCreator getMailCreator(final ExecutableFlow flow) {
-    final String name = flow.getExecutionOptions().getMailCreator();
-    return getMailCreator(name);
-  }
-
-  private MailCreator getMailCreator(final String name) {
-    final MailCreator mailCreator = DefaultMailCreator.getCreator(name);
-    logger.debug("ExecutorMailer using mail creator:" + mailCreator.getClass().getCanonicalName());
-    return mailCreator;
-  }
-
-  public void sendEmail(final EmailMessage message, final boolean mailCreated,
-      final String operation) {
-    if (mailCreated) {
-      try {
-        message.sendEmail();
-        logger.info("Sent " + operation);
-        this.commonMetrics.markSendEmailSuccess();
-      } catch (final Exception e) {
-        logger.error("Failed to send " + operation, e);
-        if (!(e instanceof AddressException)) {
+      if (!this.testMode) {
+        try {
+          message.sendEmail();
+          this.commonMetrics.markSendEmailSuccess();
+        } catch (final MessagingException e) {
+          logger.error("Failed to send SLA email message" + slaMessage, e);
           this.commonMetrics.markSendEmailFail();
         }
       }
     }
   }
 
-  private String getJobOrFlowName(final SlaOption slaOption) {
-    if (org.apache.commons.lang.StringUtils.isNotBlank(slaOption.getJobName())) {
-      return slaOption.getFlowName() + ":" + slaOption.getJobName();
-    } else {
-      return slaOption.getFlowName();
+  public void sendFirstErrorMessage(final ExecutableFlow flow) {
+    final EmailMessage message = new EmailMessage(this.mailHost, this.mailPort, this.mailUser,
+        this.mailPassword);
+    message.setFromAddress(this.mailSender);
+    message.setTLS(this.tls);
+    message.setAuth(super.hasMailAuth());
+
+    final ExecutionOptions option = flow.getExecutionOptions();
+
+    final MailCreator mailCreator =
+        DefaultMailCreator.getCreator(option.getMailCreator());
+
+    logger.debug("ExecutorMailer using mail creator:"
+        + mailCreator.getClass().getCanonicalName());
+
+    final boolean mailCreated =
+        mailCreator.createFirstErrorMessage(flow, message, this.azkabanName, this.scheme,
+            this.clientHostname, this.clientPortNumber);
+
+    if (mailCreated && !this.testMode) {
+      try {
+        message.sendEmail();
+        this.commonMetrics.markSendEmailSuccess();
+      } catch (final MessagingException e) {
+        logger.error(
+            "Failed to send first error email message for execution " + flow.getExecutionId(), e);
+        this.commonMetrics.markSendEmailFail();
+      }
     }
+  }
+
+  public void sendErrorEmail(final ExecutableFlow flow, final String... extraReasons) {
+    final EmailMessage message = new EmailMessage(this.mailHost, this.mailPort, this.mailUser,
+        this.mailPassword);
+    message.setFromAddress(this.mailSender);
+    message.setTLS(this.tls);
+    message.setAuth(super.hasMailAuth());
+
+    final ExecutionOptions option = flow.getExecutionOptions();
+
+    final MailCreator mailCreator =
+        DefaultMailCreator.getCreator(option.getMailCreator());
+    logger.debug("ExecutorMailer using mail creator:"
+        + mailCreator.getClass().getCanonicalName());
+
+    final boolean mailCreated =
+        mailCreator.createErrorEmail(flow, message, this.azkabanName, this.scheme,
+            this.clientHostname, this.clientPortNumber, extraReasons);
+
+    if (mailCreated && !this.testMode) {
+      try {
+        message.sendEmail();
+        this.commonMetrics.markSendEmailSuccess();
+      } catch (final MessagingException e) {
+        logger
+            .error("Failed to send error email message for execution " + flow.getExecutionId(), e);
+        this.commonMetrics.markSendEmailFail();
+      }
+    }
+  }
+
+  public void sendSuccessEmail(final ExecutableFlow flow) {
+    final EmailMessage message = new EmailMessage(this.mailHost, this.mailPort, this.mailUser,
+        this.mailPassword);
+    message.setFromAddress(this.mailSender);
+    message.setTLS(this.tls);
+    message.setAuth(super.hasMailAuth());
+
+    final ExecutionOptions option = flow.getExecutionOptions();
+
+    final MailCreator mailCreator =
+        DefaultMailCreator.getCreator(option.getMailCreator());
+    logger.debug("ExecutorMailer using mail creator:"
+        + mailCreator.getClass().getCanonicalName());
+
+    final boolean mailCreated =
+        mailCreator.createSuccessEmail(flow, message, this.azkabanName, this.scheme,
+            this.clientHostname, this.clientPortNumber);
+
+    if (mailCreated && !this.testMode) {
+      try {
+        message.sendEmail();
+        this.commonMetrics.markSendEmailSuccess();
+      } catch (final MessagingException e) {
+        logger.error("Failed to send success email message for execution " + flow.getExecutionId(),
+            e);
+        this.commonMetrics.markSendEmailFail();
+      }
+    }
+  }
+
+  @Override
+  public void alertOnSuccess(final ExecutableFlow exflow) throws Exception {
+    sendSuccessEmail(exflow);
+  }
+
+  @Override
+  public void alertOnError(final ExecutableFlow exflow, final String... extraReasons)
+      throws Exception {
+    sendErrorEmail(exflow, extraReasons);
+  }
+
+  @Override
+  public void alertOnFirstError(final ExecutableFlow exflow) throws Exception {
+    sendFirstErrorMessage(exflow);
+  }
+
+  @Override
+  public void alertOnSla(final SlaOption slaOption, final String slaMessage)
+      throws Exception {
+    sendSlaAlertEmail(slaOption, slaMessage);
   }
 }

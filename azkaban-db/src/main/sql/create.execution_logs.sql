@@ -1,12 +1,6 @@
--- In table execution_logs, name is the combination of flow_id and job_id
---
--- prefix support and lengths of prefixes (where supported) are storage engine dependent.
--- By default, the index key prefix length limit is 767 bytes for innoDB.
--- from: https://dev.mysql.com/doc/refman/5.7/en/create-index.html
-
 CREATE TABLE execution_logs (
   exec_id     INT NOT NULL,
-  name        VARCHAR(640),
+  name        VARCHAR(128),
   attempt     INT,
   enc_type    TINYINT,
   start_byte  INT,

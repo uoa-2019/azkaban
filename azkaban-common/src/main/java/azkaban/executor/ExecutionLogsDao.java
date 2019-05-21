@@ -16,7 +16,7 @@
 
 package azkaban.executor;
 
-import azkaban.db.EncodingType;
+import azkaban.database.EncodingType;
 import azkaban.db.DatabaseOperator;
 import azkaban.db.DatabaseTransOperator;
 import azkaban.db.SQLTransaction;

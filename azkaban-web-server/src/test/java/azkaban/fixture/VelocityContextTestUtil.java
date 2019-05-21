@@ -1,6 +1,6 @@
 package azkaban.fixture;
 
-import azkaban.utils.TimeUtils;
+import azkaban.utils.WebUtils;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.tools.generic.EscapeTool;
 
@@ -20,7 +20,8 @@ public class VelocityContextTestUtil {
   public static VelocityContext getInstance() {
     final VelocityContext context = new VelocityContext();
     context.put("esc", new EscapeTool());
-    context.put("TimeUtils", TimeUtils.class);
+    final WebUtils utils = new WebUtils();
+    context.put("utils", utils);
     return context;
   }
 }

@@ -16,15 +16,8 @@
  */
 package azkaban.db;
 
-import static java.util.Objects.requireNonNull;
-
-import java.sql.Connection;
 import java.sql.SQLException;
-import javax.inject.Inject;
-import org.apache.commons.dbutils.DbUtils;
-import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
-import org.apache.log4j.Logger;
 
 /**
  * This interface is to define Base Data Access Object contract for Azkaban. All azkaban DB related
@@ -33,27 +26,10 @@ import org.apache.log4j.Logger;
  *
  * @see org.apache.commons.dbutils.QueryRunner
  */
-public class DatabaseOperator {
-
-  private static final Logger logger = Logger.getLogger(DatabaseOperator.class);
-
-  private final QueryRunner queryRunner;
-
-  @Inject
-  private DBMetrics dbMetrics;
+public interface DatabaseOperator {
 
   /**
-   * Note: this queryRunner should include a concrete {@link AzkabanDataSource} inside.
-   */
-  @Inject
-  public DatabaseOperator(final QueryRunner queryRunner) {
-    requireNonNull(queryRunner.getDataSource(), "data source must not be null.");
-    this.queryRunner = queryRunner;
-  }
-
-  /**
-   * Executes the given Azkaban related SELECT SQL operations. it will call
-   * {@link AzkabanDataSource#getConnection()} inside queryrunner.query.
+   * Executes the given Azkaban related SELECT SQL operations.
    *
    * @param sqlQuery The SQL query statement to execute.
    * @param resultHandler The handler used to create the result object
@@ -61,20 +37,8 @@ public class DatabaseOperator {
    * @param <T> The type of object that the qeury handler returns
    * @return The object returned by the handler.
    */
-  public <T> T query(final String baseQuery, final ResultSetHandler<T> resultHandler,
-      final Object... params)
-      throws SQLException {
-    try {
-      return this.queryRunner.query(baseQuery, resultHandler, params);
-    } catch (final SQLException ex) {
-      // todo kunkun-tang: Retry logics should be implemented here.
-      logger.error("query failed", ex);
-      if (this.dbMetrics != null) {
-        this.dbMetrics.markDBFailQuery();
-      }
-      throw ex;
-    }
-  }
+  <T> T query(String sqlQuery, ResultSetHandler<T> resultHandler, Object... params)
+      throws SQLException;
 
   /**
    * Provide a way to allow users define custom SQL operations without relying on fixed SQL
@@ -85,54 +49,19 @@ public class DatabaseOperator {
    * @param <T> The type of object that the operations returns. Note that T could be null
    * @return T The object returned by the SQL statement, expected by the caller
    */
-  public <T> T transaction(final SQLTransaction<T> operations) throws SQLException {
-    Connection conn = null;
-    try {
-      conn = this.queryRunner.getDataSource().getConnection();
-      conn.setAutoCommit(false);
-      final DatabaseTransOperator transOperator = new DatabaseTransOperator(this.queryRunner,
-          conn);
-      final T res = operations.execute(transOperator);
-      conn.commit();
-      return res;
-    } catch (final SQLException ex) {
-      // todo kunkun-tang: Retry logics should be implemented here.
-      logger.error("transaction failed", ex);
-      if (this.dbMetrics != null) {
-        this.dbMetrics.markDBFailTransaction();
-      }
-      throw ex;
-    } finally {
-      DbUtils.closeQuietly(conn);
-    }
-  }
+  <T> T transaction(SQLTransaction<T> operations) throws SQLException;
 
   /**
    * Executes the given AZ related INSERT, UPDATE, or DELETE SQL statement.
-   * it will call {@link AzkabanDataSource#getConnection()} inside
-   * queryrunner.update.
    *
    * @param updateClause sql statements to execute
    * @param params Initialize the PreparedStatement's IN parameters
    * @return The number of rows updated.
    */
-  public int update(final String updateClause, final Object... params) throws SQLException {
-    try {
-      return this.queryRunner.update(updateClause, params);
-    } catch (final SQLException ex) {
-      // todo kunkun-tang: Retry logics should be implemented here.
-      logger.error("update failed", ex);
-      if (this.dbMetrics != null) {
-        this.dbMetrics.markDBFailUpdate();
-      }
-      throw ex;
-    }
-  }
+  int update(String updateClause, Object... params) throws SQLException;
 
   /**
    * @return datasource wrapped in the database operator.
    */
-  public AzkabanDataSource getDataSource() {
-    return (AzkabanDataSource) this.queryRunner.getDataSource();
-  }
+  AzkabanDataSource getDataSource();
 }

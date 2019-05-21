@@ -12,7 +12,8 @@ public class XmlValidatorManagerTest {
   private final Props baseProps = new Props();
 
   /**
-   * Test that no validator directory exists when there is no xml configuration.
+   * Test that if the validator directory does not exist, XmlValidatorManager should still load the
+   * default validator.
    */
   @Test
   public void testNoValidatorsDir() {
@@ -20,8 +21,32 @@ public class XmlValidatorManagerTest {
 
     final XmlValidatorManager manager = new XmlValidatorManager(props);
     assertEquals(
-        "XmlValidatorManager should contain 0 validator when no xml configuration "
-            + "file is present.", manager.getValidatorsInfo().size(), 0);
+        "XmlValidatorManager should contain only the default validator when no xml configuration "
+            + "file is present.", manager.getValidatorsInfo().size(), 1);
+    assertEquals(
+        "XmlValidatorManager should contain only the default validator when no xml configuration "
+            + "file is present.", manager.getValidatorsInfo().get(0),
+        XmlValidatorManager.DEFAULT_VALIDATOR_KEY);
+  }
+
+  /**
+   * Test that if the validator directory exists but the xml configuration file does not,
+   * XmlValidatorManager only loads the default validator.
+   */
+  @Test
+  public void testDefaultValidator() {
+    final Props props = new Props(this.baseProps);
+    final URL validatorUrl = Resources.getResource("project/testValidators");
+    props.put(ValidatorConfigs.VALIDATOR_PLUGIN_DIR, validatorUrl.getPath());
+
+    final XmlValidatorManager manager = new XmlValidatorManager(props);
+    assertEquals(
+        "XmlValidatorManager should contain only the default validator when no xml configuration "
+            + "file is present.", manager.getValidatorsInfo().size(), 1);
+    assertEquals(
+        "XmlValidatorManager should contain only the default validator when no xml configuration "
+            + "file is present.", manager.getValidatorsInfo().get(0),
+        XmlValidatorManager.DEFAULT_VALIDATOR_KEY);
   }
 
   /**
@@ -41,9 +66,10 @@ public class XmlValidatorManagerTest {
   }
 
   /**
-   * Test that if the xml config file is properly set, XmlValidatorManager loads the validator
-   * specified in the xml file. The TestValidator class specified in the xml configuration file
-   * is located with the jar file inside test resource directory project/testValidators.
+   * Test that if the xml config file is properly set, XmlValidatorManager loads both the default
+   * validator and the one specified in the xml file. The TestValidator class specified in the xml
+   * configuration file is located with the jar file inside test resource directory
+   * project/testValidators.
    */
   @Test
   public void testLoadValidators() {
@@ -54,11 +80,11 @@ public class XmlValidatorManagerTest {
     props.put(ValidatorConfigs.XML_FILE_PARAM, configUrl.getPath());
 
     final XmlValidatorManager manager = new XmlValidatorManager(props);
-    assertEquals("XmlValidatorManager should contain 1 validator.",
-        manager.getValidatorsInfo().size(), 1);
+    assertEquals("XmlValidatorManager should contain 2 validators.",
+        manager.getValidatorsInfo().size(), 2);
     assertEquals(
         "XmlValidatorManager should contain the validator specified in the xml configuration file.",
-        manager.getValidatorsInfo().get(0), "Test");
+        manager.getValidatorsInfo().get(1), "Test");
   }
 
 }

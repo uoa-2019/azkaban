@@ -17,23 +17,15 @@
 package azkaban.trigger;
 
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.anyObject;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-import azkaban.executor.ExecutionOptions;
-import azkaban.executor.ExecutorManagerAdapter;
-import azkaban.executor.ExecutorManagerException;
-import azkaban.flow.Flow;
-import azkaban.project.Project;
-import azkaban.project.ProjectManager;
+import azkaban.executor.ExecutorManager;
 import azkaban.trigger.builtin.BasicTimeChecker;
-import azkaban.trigger.builtin.ExecuteFlowAction;
 import azkaban.utils.Props;
-import azkaban.utils.TimeUtils;
-import com.google.common.collect.ImmutableMap;
+import azkaban.utils.Utils;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,31 +41,21 @@ import org.junit.Test;
 public class TriggerManagerTest {
 
   private static TriggerLoader triggerLoader;
-  private static ExecutorManagerAdapter executorManagerAdapter;
-  private static ProjectManager projectManager;
+  private static ExecutorManager executorManager;
   private TriggerManager triggerManager;
 
   @BeforeClass
   public static void prepare() {
     triggerLoader = new MockTriggerLoader();
-    executorManagerAdapter = mock(ExecutorManagerAdapter.class);
-    projectManager = mock(ProjectManager.class);
+    executorManager = mock(ExecutorManager.class);
+    doNothing().when(executorManager).addListener(anyObject());
   }
 
   @Before
-  public void setup() throws Exception {
-    final Project project = new Project(1, "test-project");
-    project.setFlows(ImmutableMap.of("test-flow", new Flow("test-flow")));
-    when(projectManager.getProject(1)).thenReturn(project);
-    when(executorManagerAdapter.submitExecutableFlow(any(), any()))
-        .thenThrow(new ExecutorManagerException("Flow is already running. Skipping execution.",
-            ExecutorManagerException.Reason.SkippedExecution));
-    ExecuteFlowAction.setExecutorManager(this.executorManagerAdapter);
-    ExecuteFlowAction.setProjectManager(this.projectManager);
-    ExecuteFlowAction.setTriggerManager(this.triggerManager);
+  public void setup() throws TriggerException, TriggerManagerException {
     final Props props = new Props();
     props.put("trigger.scan.interval", 300);
-    this.triggerManager = new TriggerManager(props, triggerLoader, executorManagerAdapter);
+    this.triggerManager = new TriggerManager(props, triggerLoader, executorManager);
     this.triggerManager.registerCheckerType(ThresholdChecker.type,
         ThresholdChecker.class);
     this.triggerManager.registerActionType(DummyTriggerAction.type,
@@ -183,7 +165,7 @@ public class TriggerManagerTest {
     // In future, we should use some smaller alternative.
     final ConditionChecker triggerChecker = new BasicTimeChecker("BasicTimeChecker_1",
         currMillis, DateTimeZone.UTC, true, true,
-        TimeUtils.parsePeriodString("1s"), null);
+        Utils.parsePeriodString("1s"), null);
 
     // End time is 3 seconds past now.
     final ConditionChecker endTimeChecker = new BasicTimeChecker("EndTimeChecker_1", 111L,
@@ -211,10 +193,7 @@ public class TriggerManagerTest {
 
   private List<TriggerAction> getTriggerActions() {
     final List<TriggerAction> actions = new ArrayList<>();
-    final ExecutionOptions executionOptions = new ExecutionOptions();
-    executionOptions.setSlaOptions(Collections.emptyList());
-    final TriggerAction act = new ExecuteFlowAction("fuu", 1, "test-project", "test-flow",
-        "test-user", executionOptions);
+    final TriggerAction act = new DummyTriggerAction("");
     actions.add(act);
     return actions;
   }

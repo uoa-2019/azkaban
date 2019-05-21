@@ -17,11 +17,12 @@
 package azkaban.scheduler;
 
 import azkaban.executor.ExecutionOptions;
+import azkaban.sla.SlaOption;
 import azkaban.trigger.TriggerAgent;
 import azkaban.trigger.TriggerStatus;
 import azkaban.utils.Pair;
 import azkaban.utils.Props;
-import javax.inject.Inject;
+import com.google.inject.Inject;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -155,10 +156,11 @@ public class ScheduleManager implements TriggerAgent {
       final long nextExecTime,
       final long submitTime,
       final String submitUser,
-      final ExecutionOptions execOptions) {
+      final ExecutionOptions execOptions,
+      final List<SlaOption> slaOptions) {
     final Schedule sched = new Schedule(scheduleId, projectId, projectName, flowName, status,
         firstSchedTime, endSchedTime, timezone, period, lastModifyTime, nextExecTime,
-        submitTime, submitUser, execOptions, null);
+        submitTime, submitUser, execOptions, slaOptions, null);
     logger
         .info("Scheduling flow '" + sched.getScheduleName() + "' for "
             + this._dateFormat.print(firstSchedTime) + " with a period of " + (period == null
@@ -182,11 +184,12 @@ public class ScheduleManager implements TriggerAgent {
       final long submitTime,
       final String submitUser,
       final ExecutionOptions execOptions,
+      final List<SlaOption> slaOptions,
       final String cronExpression) {
     final Schedule sched =
         new Schedule(scheduleId, projectId, projectName, flowName, status,
             firstSchedTime, endSchedTime, timezone, null, lastModifyTime, nextExecTime,
-            submitTime, submitUser, execOptions, cronExpression);
+            submitTime, submitUser, execOptions, slaOptions, cronExpression);
     logger
         .info("Scheduling flow '" + sched.getScheduleName() + "' for "
             + this._dateFormat.print(firstSchedTime) + " cron Expression = " + cronExpression);

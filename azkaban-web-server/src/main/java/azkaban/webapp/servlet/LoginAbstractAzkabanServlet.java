@@ -13,6 +13,7 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
+
 package azkaban.webapp.servlet;
 
 import static azkaban.ServiceProvider.SERVICE_PROVIDER;
@@ -25,6 +26,7 @@ import azkaban.user.User;
 import azkaban.user.UserManager;
 import azkaban.user.UserManagerException;
 import azkaban.utils.StringUtils;
+import azkaban.utils.WebUtils;
 import azkaban.webapp.WebMetrics;
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -34,7 +36,6 @@ import java.io.OutputStream;
 import java.io.Writer;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -45,11 +46,11 @@ import org.apache.commons.fileupload.servlet.ServletFileUpload;
 import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 
-
 /**
  * Abstract Servlet that handles auto login when the session hasn't been verified.
  */
-public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet {
+public abstract class LoginAbstractAzkabanServlet extends
+    AbstractAzkabanServlet {
 
   private static final long serialVersionUID = 1L;
 
@@ -219,7 +220,9 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
     headers.put(WebUtils.X_FORWARDED_FOR_HEADER,
         req.getHeader(WebUtils.X_FORWARDED_FOR_HEADER.toLowerCase()));
 
-    return WebUtils.getRealClientIpAddr(headers, req.getRemoteAddr());
+    final WebUtils utils = new WebUtils();
+
+    return utils.getRealClientIpAddr(headers, req.getRemoteAddr());
   }
 
   private Session getSessionFromRequest(final HttpServletRequest req)
@@ -251,7 +254,7 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
   }
 
   private void handleLogin(final HttpServletRequest req, final HttpServletResponse resp,
-      final String errorMsg) {
+      final String errorMsg) throws ServletException, IOException {
     final Page page = newPage(req, resp, "azkaban/webapp/servlet/velocity/login.vm");
     page.add("passwordPlaceholder", this.passwordPlaceholder);
     if (errorMsg != null) {
@@ -326,9 +329,8 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
         // back a message or redirect.
         if (isAjaxCall(req)) {
           final String response =
-              AbstractAzkabanServlet
-                  .createJsonResponse("error", "Invalid Session. Need to re-login",
-                      "login", null);
+              createJsonResponse("error", "Invalid Session. Need to re-login",
+                  "login", null);
           writeResponse(resp, response);
         } else {
           handleLogin(req, resp, "Enter username and password");
@@ -349,9 +351,9 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
    * distinction between the illegal request above and the following valid request: curl -X POST -d
    * "action=login&username=azkaban&password=azkaban" http://localhost:8081/
    *
-   * "password=" is searched for because it leverages the query syntax to determine that the user
-   * is passing the password as a parameter name. There is no other ajax call that has a parameter
-   * that includes the string "password" at the end which could throw false positives.
+   * "password=" is searched for because it leverages the query syntax to determine that the user is
+   * passing the password as a parameter name. There is no other ajax call that has a parameter that
+   * includes the string "password" at the end which could throw false positives.
    */
   private boolean isIllegalPostRequest(final HttpServletRequest req) {
     return (req.getQueryString() != null && req.getQueryString().contains("password="));
@@ -367,7 +369,7 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
   }
 
   private Session createSession(final String username, final String password, final String ip)
-      throws UserManagerException {
+      throws UserManagerException, ServletException {
     final UserManager manager = getApplication().getUserManager();
     final User user = manager.getUser(username, password);
 
@@ -395,47 +397,6 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
     return false;
   }
 
-  /**
-   * Filter Project based on user authorization
-   *
-   * @param project project
-   * @param user user
-   * @param type permission allowance
-   * @return authorized project itself or null if the project is not authorized
-   */
-  protected Project filterProjectByPermission(final Project project, final User user,
-      final Permission.Type type) {
-    return filterProjectByPermission(project, user, type, null);
-  }
-
-  /**
-   * Filter Project based on user authorization
-   *
-   * @param project project
-   * @param user user
-   * @param type permission allowance
-   * @param ret return map for holding messages
-   * @return authorized project itself or null if the project is not authorized
-   */
-  protected Project filterProjectByPermission(final Project project, final User user,
-      final Permission.Type type, final Map<String, Object> ret) {
-    if (project == null) {
-      if (ret != null) {
-        ret.put("error", "Project 'null' not found.");
-      }
-    } else if (!hasPermission(project, user, type)) {
-      if (ret != null) {
-        ret.put("error",
-            "User '" + user.getUserId() + "' doesn't have " + type.name()
-                + " permissions on " + project.getName());
-      }
-    } else {
-      return project;
-    }
-
-    return null;
-  }
-
   protected void handleAjaxLoginAction(final HttpServletRequest req,
       final HttpServletResponse resp, final Map<String, Object> ret)
       throws ServletException {
@@ -452,13 +413,6 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
       cookie.setPath("/");
       resp.addCookie(cookie);
       getApplication().getSessionCache().addSession(session);
-      final Set<Session> sessionsOfSameIP =
-          getApplication().getSessionCache().findSessionsByIP(session.getIp());
-
-      // Check potential DDoS attack by bad hosts.
-      logger.info(
-          "Session id created for user '" + session.getUser().getUserId() + "' and ip " + session
-              .getIp() + ", " + sessionsOfSameIP.size() + " session(s) found from this IP");
       ret.put("status", "success");
       ret.put("session.id", session.getSessionId());
     } else {
@@ -473,7 +427,7 @@ public abstract class LoginAbstractAzkabanServlet extends AbstractAzkabanServlet
     writer.flush();
   }
 
-  protected boolean isAjaxCall(final HttpServletRequest req) {
+  protected boolean isAjaxCall(final HttpServletRequest req) throws ServletException {
     final String value = req.getHeader("X-Requested-With");
     if (value != null) {
       logger.info("has X-Requested-With " + value);

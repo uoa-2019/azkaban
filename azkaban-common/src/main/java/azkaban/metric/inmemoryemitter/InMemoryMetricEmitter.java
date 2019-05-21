@@ -21,12 +21,11 @@ import azkaban.metric.IMetricEmitter;
 import azkaban.metric.MetricException;
 import azkaban.utils.Props;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import org.apache.log4j.Logger;
@@ -47,7 +46,7 @@ public class InMemoryMetricEmitter implements IMetricEmitter {
   /**
    * Data structure to keep track of snapshots
    */
-  protected Map<String, LinkedBlockingDeque<InMemoryHistoryNode>> historyListMapping;
+  protected Map<String, LinkedList<InMemoryHistoryNode>> historyListMapping;
   /**
    * Interval (in millisecond) from today for which we should maintain the in memory snapshots
    */
@@ -61,7 +60,7 @@ public class InMemoryMetricEmitter implements IMetricEmitter {
    * @param azkProps Azkaban Properties
    */
   public InMemoryMetricEmitter(final Props azkProps) {
-    this.historyListMapping = new ConcurrentHashMap<>();
+    this.historyListMapping = new HashMap<>();
     this.timeWindow = azkProps.getLong(INMEMORY_METRIC_REPORTER_WINDOW, 60 * 60 * 24 * 7 * 1000);
     this.numInstances = azkProps.getLong(INMEMORY_METRIC_NUM_INSTANCES, 50);
     this.standardDeviationFactor = azkProps.getDouble(INMEMORY_METRIC_STANDARDDEVIATION_FACTOR, 2);
@@ -70,7 +69,7 @@ public class InMemoryMetricEmitter implements IMetricEmitter {
   /**
    * Update reporting interval
    *
-   * @param val interval in milliseconds
+   * @param val interval in milli seconds
    */
   public synchronized void setReportingInterval(final long val) {
     this.timeWindow = val;
@@ -93,7 +92,7 @@ public class InMemoryMetricEmitter implements IMetricEmitter {
     final String metricName = metric.getName();
     if (!this.historyListMapping.containsKey(metricName)) {
       logger.info("First time capturing metric: " + metricName);
-      this.historyListMapping.put(metricName, new LinkedBlockingDeque<>());
+      this.historyListMapping.put(metricName, new LinkedList<>());
     }
     synchronized (this.historyListMapping.get(metricName)) {
       logger.debug("Ingesting metric: " + metricName);

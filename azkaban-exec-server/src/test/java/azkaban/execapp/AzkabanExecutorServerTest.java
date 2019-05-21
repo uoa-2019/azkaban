@@ -17,7 +17,6 @@
 
 package azkaban.execapp;
 
-import static azkaban.ServiceProviderTest.assertSingleton;
 import static java.util.Objects.requireNonNull;
 import static org.apache.commons.io.FileUtils.deleteQuietly;
 import static org.junit.Assert.assertNotNull;
@@ -75,7 +74,7 @@ public class AzkabanExecutorServerTest {
   public static void tearDown() throws Exception {
     deleteQuietly(new File("h2.mv.db"));
     deleteQuietly(new File("h2.trace.db"));
-    deleteQuietly(new File(Constants.DEFAULT_EXECUTOR_PORT_FILE));
+    deleteQuietly(new File("executor.port"));
     deleteQuietly(new File("executions"));
     deleteQuietly(new File("projects"));
   }
@@ -90,11 +89,8 @@ public class AzkabanExecutorServerTest {
         new AzkabanExecServerModule()
     );
 
+    assertNotNull(injector.getInstance(AzkabanExecutorServer.class));
     assertNotNull(injector.getInstance(Emailer.class));
     assertNotNull(injector.getInstance(AlerterHolder.class));
-
-    assertSingleton(TriggerManager.class, injector);
-    assertSingleton(FlowRunnerManager.class, injector);
-    assertSingleton(AzkabanExecutorServer.class, injector);
   }
 }

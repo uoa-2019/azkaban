@@ -24,7 +24,6 @@ import azkaban.executor.ExecutorLoader;
 import azkaban.sla.SlaOption;
 import azkaban.trigger.TriggerAction;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.apache.log4j.Logger;
 
@@ -61,14 +60,8 @@ public class SlaAlertAction implements TriggerAction {
           + jsonObj.get("type"));
     }
     final String actionId = (String) jsonObj.get("actionId");
-
-    SlaOption slaOption;
-    List<String> emails;
-    // TODO edlu: is this being written? Handle both old and new formats, when written in new
-    // format
-     slaOption = SlaOption.fromObject(jsonObj.get("slaOption"));
+    final SlaOption slaOption = SlaOption.fromObject(jsonObj.get("slaOption"));
     final int execId = Integer.valueOf((String) jsonObj.get("execId"));
-
     return new SlaAlertAction(actionId, slaOption, execId);
   }
 
@@ -92,8 +85,7 @@ public class SlaAlertAction implements TriggerAction {
     final Map<String, Object> jsonObj = new HashMap<>();
     jsonObj.put("actionId", this.actionId);
     jsonObj.put("type", type);
-    // TODO edlu: keeping the old format for now, upgrade to new format.
-    jsonObj.put("slaAction", this.slaOption.toObject());
+    jsonObj.put("slaOption", this.slaOption.toObject());
     jsonObj.put("execId", String.valueOf(this.execId));
 
     return jsonObj;
@@ -102,18 +94,20 @@ public class SlaAlertAction implements TriggerAction {
   @Override
   public void doAction() throws Exception {
     logger.info("Alerting on sla failure.");
-    if (slaOption.hasAlert()) {
-      final Alerter alerter = this.alerters.get(SlaOption.ALERT_TYPE_EMAIL);
+    final Map<String, Object> alert = this.slaOption.getInfo();
+    if (alert.containsKey(SlaOption.ALERT_TYPE)) {
+      final String alertType = (String) alert.get(SlaOption.ALERT_TYPE);
+      final Alerter alerter = this.alerters.get(alertType);
       if (alerter != null) {
         try {
           final ExecutableFlow flow = this.executorLoader.fetchExecutableFlow(this.execId);
-          alerter.alertOnSla(this.slaOption, slaOption.createSlaMessage(flow));
+          alerter.alertOnSla(this.slaOption, SlaOption.createSlaMessage(this.slaOption, flow));
         } catch (final Exception e) {
           e.printStackTrace();
-          logger.error("Failed to alert by " + SlaOption.ALERT_TYPE_EMAIL);
+          logger.error("Failed to alert by " + alertType);
         }
       } else {
-        logger.error("Alerter type " + SlaOption.ALERT_TYPE_EMAIL
+        logger.error("Alerter type " + alertType
             + " doesn't exist. Failed to alert.");
       }
     }

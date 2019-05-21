@@ -16,22 +16,30 @@
 
 package azkaban.execapp;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
 
 import azkaban.executor.ExecutableFlow;
 import azkaban.executor.ExecutableFlowBase;
 import azkaban.executor.ExecutableNode;
+import azkaban.executor.ExecutorLoader;
 import azkaban.executor.InteractiveTestJob;
-import azkaban.executor.Status;
+import azkaban.executor.JavaJob;
+import azkaban.executor.MockExecutorLoader;
+import azkaban.flow.Flow;
+import azkaban.jobtype.JobTypeManager;
 import azkaban.project.Project;
-import azkaban.test.executions.ExecutionsTestUtil;
+import azkaban.project.ProjectLoader;
 import azkaban.utils.Props;
 import java.io.File;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import org.apache.commons.io.FileUtils;
+import org.apache.log4j.Logger;
+import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 /**
@@ -49,61 +57,70 @@ import org.junit.Test;
  *
  * job2 and 4 are in nested directories so should have different shared properties than other jobs.
  */
-public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
+public class FlowRunnerPropertyResolutionTest {
 
-  private static final String EXEC_FLOW_DIR = "execpropstest";
-  private static final String FLOW_YAML_DIR = "loadpropsflowyamltest";
-  private static final String FLOW_NAME = "job3";
-  private static final String FLOW_YAML_FILE = FLOW_NAME + ".flow";
-  private FlowRunnerTestUtil testUtil;
+  private static int id = 101;
+  private final Logger logger = Logger.getLogger(FlowRunnerTest2.class);
+  private File workingDir;
+  private JobTypeManager jobtypeManager;
+  private ExecutorLoader fakeExecutorLoader;
+  private Project project;
+  private Map<String, Flow> flowMap;
+
+  @Before
+  public void setUp() throws Exception {
+    System.out.println("Create temp dir");
+    this.workingDir = new File("_AzkabanTestDir_" + System.currentTimeMillis());
+    if (this.workingDir.exists()) {
+      FileUtils.deleteDirectory(this.workingDir);
+    }
+    this.workingDir.mkdirs();
+    this.jobtypeManager =
+        new JobTypeManager(null, null, this.getClass().getClassLoader());
+    this.jobtypeManager.getJobTypePluginSet().addPluginClass("java", JavaJob.class);
+    this.jobtypeManager.getJobTypePluginSet().addPluginClass("test",
+        InteractiveTestJob.class);
+    this.fakeExecutorLoader = new MockExecutorLoader();
+    this.project = new Project(1, "testProject");
+
+    final File dir = new File("unit/executions/execpropstest");
+    this.flowMap = FlowRunnerTestUtil
+        .prepareProject(this.project, dir, this.logger, this.workingDir);
+
+    InteractiveTestJob.clearTestJobs();
+  }
+
+  @After
+  public void tearDown() throws IOException {
+    System.out.println("Teardown temp dir");
+    if (this.workingDir != null) {
+      FileUtils.deleteDirectory(this.workingDir);
+      this.workingDir = null;
+    }
+  }
 
   /**
    * Tests the basic flow resolution. Flow is defined in execpropstest
    */
+  @Ignore
   @Test
   public void testPropertyResolution() throws Exception {
-    this.testUtil = new FlowRunnerTestUtil(EXEC_FLOW_DIR, this.temporaryFolder);
-    assertProperties(false);
-  }
-
-  /**
-   * Tests the YAML flow resolution. Flow is defined in loadpropsflowyamltest
-   */
-  @Test
-  public void testYamlFilePropertyResolution() throws Exception {
-    this.testUtil = new FlowRunnerTestUtil(FLOW_YAML_DIR, this.temporaryFolder);
-    final Project project = this.testUtil.getProject();
-    when(this.testUtil.getProjectLoader().isFlowFileUploaded(project.getId(), project.getVersion()))
-        .thenReturn(true);
-    when(this.testUtil.getProjectLoader()
-        .getLatestFlowVersion(project.getId(), project.getVersion(), FLOW_YAML_FILE)).thenReturn(1);
-    when(this.testUtil.getProjectLoader()
-        .getUploadedFlowFile(eq(project.getId()), eq(project.getVersion()), eq(FLOW_YAML_FILE),
-            eq(1), any(File.class)))
-        .thenReturn(ExecutionsTestUtil.getFlowFile(FLOW_YAML_DIR, FLOW_YAML_FILE));
-    assertProperties(true);
-  }
-
-  /**
-   * Helper method to test the flow property resolution.
-   */
-  private void assertProperties(final boolean isAzkabanFlowVersion20) throws Exception {
     final HashMap<String, String> flowProps = new HashMap<>();
     flowProps.put("props7", "flow7");
     flowProps.put("props6", "flow6");
     flowProps.put("props5", "flow5");
-    final FlowRunner runner = this.testUtil.createFromFlowMap(FLOW_NAME, flowProps);
+    final FlowRunner runner = createFlowRunner("job3", flowProps);
     final Map<String, ExecutableNode> nodeMap = new HashMap<>();
     createNodeMap(runner.getExecutableFlow(), nodeMap);
-    final ExecutableFlow flow = runner.getExecutableFlow();
 
     // 1. Start flow. Job 2 should start
-    FlowRunnerTestUtil.startThread(runner);
-    assertStatus(flow, "job2", Status.RUNNING);
+    runFlowRunnerInThread(runner);
+    pause(250);
 
     // Job 2 is a normal job.
     // Only the flow overrides and the shared properties matter
-    final Props job2Props = nodeMap.get("job2").getInputProps();
+    ExecutableNode node = nodeMap.get("job2");
+    final Props job2Props = node.getInputProps();
     Assert.assertEquals("shared1", job2Props.get("props1"));
     Assert.assertEquals("job2", job2Props.get("props2"));
     Assert.assertEquals("moo3", job2Props.get("props3"));
@@ -121,9 +138,9 @@ public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
     job2Generated.put("props9", "gjob9");
     job2Generated.put("props10", "gjob10");
     InteractiveTestJob.getTestJob("job2").succeedJob(job2Generated);
-    assertStatus(flow, "innerflow:job1", Status.RUNNING);
-
-    final Props job1Props = nodeMap.get("innerflow:job1").getInputProps();
+    pause(250);
+    node = nodeMap.get("innerflow:job1");
+    final Props job1Props = node.getInputProps();
     Assert.assertEquals("job1", job1Props.get("props1"));
     Assert.assertEquals("job2", job1Props.get("props2"));
     Assert.assertEquals("job8", job1Props.get("props8"));
@@ -144,8 +161,9 @@ public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
     job1GeneratedProps.put("props7", "g2job7");
     InteractiveTestJob.getTestJob("innerflow:job1").succeedJob(
         job1GeneratedProps);
-    assertStatus(flow, "innerflow:job4", Status.RUNNING);
-    final Props job4Props = nodeMap.get("innerflow:job4").getInputProps();
+    pause(250);
+    node = nodeMap.get("innerflow:job4");
+    final Props job4Props = node.getInputProps();
     Assert.assertEquals("job8", job4Props.get("props8"));
     Assert.assertEquals("job9", job4Props.get("props9"));
     Assert.assertEquals("g2job7", job4Props.get("props7"));
@@ -165,8 +183,9 @@ public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
     job4GeneratedProps.put("props6", "g4job6");
     InteractiveTestJob.getTestJob("innerflow:job4").succeedJob(
         job4GeneratedProps);
-    assertStatus(flow, FLOW_NAME, Status.RUNNING);
-    final Props job3Props = nodeMap.get("job3").getInputProps();
+    pause(250);
+    node = nodeMap.get("job3");
+    final Props job3Props = node.getInputProps();
     Assert.assertEquals("job3", job3Props.get("props3"));
     Assert.assertEquals("g4job6", job3Props.get("props6"));
     Assert.assertEquals("g4job9", job3Props.get("props9"));
@@ -177,6 +196,29 @@ public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
     Assert.assertEquals("moo4", job3Props.get("props4"));
   }
 
+  private FlowRunner createFlowRunner(final String flowName,
+      final HashMap<String, String> flowParams) throws Exception {
+    return createFlowRunner(flowName, flowParams, new Props());
+  }
+
+  private FlowRunner createFlowRunner(final String flowName,
+      final HashMap<String, String> flowParams, final Props azkabanProps) throws Exception {
+    final Flow flow = this.flowMap.get(flowName);
+
+    final int exId = id++;
+    final ExecutableFlow exFlow = new ExecutableFlow(this.project, flow);
+    exFlow.setExecutionPath(this.workingDir.getPath());
+    exFlow.setExecutionId(exId);
+
+    exFlow.getExecutionOptions().addAllFlowParameters(flowParams);
+    this.fakeExecutorLoader.uploadExecutableFlow(exFlow);
+
+    final FlowRunner runner =
+        new FlowRunner(this.fakeExecutorLoader.fetchExecutableFlow(exId),
+            this.fakeExecutorLoader, mock(ProjectLoader.class), this.jobtypeManager, azkabanProps);
+    return runner;
+  }
+
   private void createNodeMap(final ExecutableFlowBase flow,
       final Map<String, ExecutableNode> nodeMap) {
     for (final ExecutableNode node : flow.getExecutableNodes()) {
@@ -185,6 +227,19 @@ public class FlowRunnerPropertyResolutionTest extends FlowRunnerTestBase {
       if (node instanceof ExecutableFlowBase) {
         createNodeMap((ExecutableFlowBase) node, nodeMap);
       }
+    }
+  }
+
+  private Thread runFlowRunnerInThread(final FlowRunner runner) {
+    final Thread thread = new Thread(runner);
+    thread.start();
+    return thread;
+  }
+
+  private void pause(final long millisec) {
+    try {
+      Thread.sleep(millisec);
+    } catch (final InterruptedException e) {
     }
   }
 }

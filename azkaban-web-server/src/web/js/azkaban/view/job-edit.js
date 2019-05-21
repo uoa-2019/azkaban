@@ -86,14 +86,12 @@ azkaban.JobEditView = Backbone.View.extend({
       mythis.overrideParams = overrideParams;
       mythis.generalParams = generalParams;
 
-      if (overrideParams && $(".editRow").length == 0)  {
-        for (var okey in overrideParams) {
-          if (okey != 'type' && okey != 'dependencies') {
-            var row = handleAddRow();
-            var td = $(row).find('span');
-            $(td[0]).text(okey);
-            $(td[1]).text(overrideParams[okey]);
-          }
+      for (var okey in overrideParams) {
+        if (okey != 'type' && okey != 'dependencies') {
+          var row = handleAddRow();
+          var td = $(row).find('span');
+          $(td[0]).text(okey);
+          $(td[1]).text(overrideParams[okey]);
         }
       }
     };

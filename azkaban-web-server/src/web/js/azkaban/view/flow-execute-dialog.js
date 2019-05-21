@@ -116,8 +116,8 @@ azkaban.FlowExecuteDialogView = Backbone.View.extend({
     var pipelineExecutionId = this.model.get("pipelineExecution");
     var queueLevel = this.model.get("queueLevel");
     var nodeStatus = this.model.get("nodeStatus");
-    var overrideSuccessEmails = this.model.get("successEmailsOverride");
-    var overrideFailureEmails = this.model.get("failureEmailsOverride");
+    var overrideSuccessEmails = this.model.get("failureEmailsOverride");
+    var overrideFailureEmails = this.model.get("successEmailsOverride");
 
     if (overrideSuccessEmails) {
       $('#override-success-emails').attr('checked', true);
@@ -162,7 +162,7 @@ azkaban.FlowExecuteDialogView = Backbone.View.extend({
       $('#queueLevel').val(queueLevel);
     }
 
-    if (flowParams && $(".editRow").length == 0) {
+    if (flowParams) {
       for (var key in flowParams) {
         editTableView.handleAddRow({
           paramkey: key,
@@ -374,9 +374,6 @@ azkaban.EditTableView = Backbone.View.extend({
   },
 
   handleEditColumn: function (evt) {
-    if (evt.target.tagName == "INPUT") {
-      return;
-    }
     var curTarget = evt.currentTarget;
 
     var text = $(curTarget).children(".spanValue").text();
@@ -637,18 +634,13 @@ var expanelNodeClickCallback = function (event, model, node) {
       menu = [
         {
           title: "Collapse Flow...", callback: function () {
-            model.trigger("collapseFlow", node);
-          }
-        },
-        {
-          title: "Collapse All Flows...", callback: function () {
-            model.trigger("collapseAllFlows", node);
-          }
+          model.trigger("collapseFlow", node);
+        }
         },
         {
           title: "Open Flow in New Window...", callback: function () {
-            window.open(flowRequestURL);
-          }
+          window.open(flowRequestURL);
+        }
         }
       ];
 
@@ -657,18 +649,13 @@ var expanelNodeClickCallback = function (event, model, node) {
       menu = [
         {
           title: "Expand Flow...", callback: function () {
-            model.trigger("expandFlow", node);
-          }
-        },
-        {
-          title: "Expand All Flows...", callback: function () {
-            model.trigger("expandAllFlows", node);
-          }
+          model.trigger("expandFlow", node);
+        }
         },
         {
           title: "Open Flow in New Window...", callback: function () {
-            window.open(flowRequestURL);
-          }
+          window.open(flowRequestURL);
+        }
         }
       ];
     }
@@ -679,8 +666,8 @@ var expanelNodeClickCallback = function (event, model, node) {
     menu = [
       {
         title: "Open Job in New Window...", callback: function () {
-          window.open(requestURL);
-        }
+        window.open(requestURL);
+      }
       },
     ];
   }
@@ -689,70 +676,70 @@ var expanelNodeClickCallback = function (event, model, node) {
     {break: 1},
     {
       title: "Enable", callback: function () {
-        touchNode(node, false);
-      }, submenu: [
-        {
-          title: "Parents", callback: function () {
-            touchParents(node, false);
-          }
-        },
-        {
-          title: "Ancestors", callback: function () {
-            touchAncestors(node, false);
-          }
-        },
-        {
-          title: "Children", callback: function () {
-            touchChildren(node, false);
-          }
-        },
-        {
-          title: "Descendents", callback: function () {
-            touchDescendents(node, false);
-          }
-        },
-        {
-          title: "Enable All", callback: function () {
-            enableAll();
-          }
-        }
-      ]
+      touchNode(node, false);
+    }, submenu: [
+      {
+        title: "Parents", callback: function () {
+        touchParents(node, false);
+      }
+      },
+      {
+        title: "Ancestors", callback: function () {
+        touchAncestors(node, false);
+      }
+      },
+      {
+        title: "Children", callback: function () {
+        touchChildren(node, false);
+      }
+      },
+      {
+        title: "Descendents", callback: function () {
+        touchDescendents(node, false);
+      }
+      },
+      {
+        title: "Enable All", callback: function () {
+        enableAll();
+      }
+      }
+    ]
     },
     {
       title: "Disable", callback: function () {
-        touchNode(node, true)
-      }, submenu: [
-        {
-          title: "Parents", callback: function () {
-            touchParents(node, true);
-          }
-        },
-        {
-          title: "Ancestors", callback: function () {
-            touchAncestors(node, true);
-          }
-        },
-        {
-          title: "Children", callback: function () {
-            touchChildren(node, true);
-          }
-        },
-        {
-          title: "Descendents", callback: function () {
-            touchDescendents(node, true);
-          }
-        },
-        {
-          title: "Disable All", callback: function () {
-            disableAll();
-          }
-        }
-      ]
+      touchNode(node, true)
+    }, submenu: [
+      {
+        title: "Parents", callback: function () {
+        touchParents(node, true);
+      }
+      },
+      {
+        title: "Ancestors", callback: function () {
+        touchAncestors(node, true);
+      }
+      },
+      {
+        title: "Children", callback: function () {
+        touchChildren(node, true);
+      }
+      },
+      {
+        title: "Descendents", callback: function () {
+        touchDescendents(node, true);
+      }
+      },
+      {
+        title: "Disable All", callback: function () {
+        disableAll();
+      }
+      }
+    ]
     },
     {
       title: "Center Job", callback: function () {
-        model.trigger("centerNode", node);
-      }
+      model.trigger("centerNode", node);
+    }
     }
   ]);
 
@@ -771,38 +758,26 @@ var expanelGraphClickCallback = function (event) {
 
   var menu = [
     {
-      title: "Expand All Flows...", callback: function () {
-        executableGraphModel.trigger("expandAllFlows");
-        executableGraphModel.trigger("resetPanZoom");
-      }
-    },
-    {
-      title: "Collapse All Flows...", callback: function () {
-        executableGraphModel.trigger("collapseAllFlows");
-        executableGraphModel.trigger("resetPanZoom");
-      }
-    },
-    {
       title: "Open Flow in New Window...", callback: function () {
-        window.open(requestURL);
-      }
+      window.open(requestURL);
+    }
     },
     {break: 1},
     {
       title: "Enable All", callback: function () {
-        enableAll();
-      }
+      enableAll();
+    }
     },
     {
       title: "Disable All", callback: function () {
-        disableAll();
-      }
+      disableAll();
+    }
     },
     {break: 1},
     {
       title: "Center Graph", callback: function () {
-        executableGraphModel.trigger("resetPanZoom");
-      }
+      executableGraphModel.trigger("resetPanZoom");
+    }
     }
   ];
 

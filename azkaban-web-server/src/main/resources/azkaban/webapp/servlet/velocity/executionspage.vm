@@ -62,7 +62,6 @@
 
   <div class="row" id="currently-running-view">
     <div class="col-xs-12">
-      <i>* Click column headers to sort.</i>
       <table id="executingJobs"
              class="table table-striped table-bordered table-hover table-condensed executions-table">
         <thead>
@@ -93,8 +92,8 @@
                 <a href="${context}/executor?execid=${flow.getFirst().executionId}">${flow.getFirst().executionId}</a>
               </td>
               <td>
-                #if (${flow.getSecond().isPresent()})
-                  ${flow.getSecond().get().getId()}
+                #if (${flow.getSecond()})
+                  ${flow.getSecond().getId()}
                 #else
                   -
                 #end
@@ -107,15 +106,12 @@
               </td>
               <td>${flow.getFirst().submitUser}</td>
               <td>${flow.getFirst().proxyUsers}</td>
-              <td>$TimeUtils.formatDateTime(${flow.getFirst().startTime})</td>
-              <td>$TimeUtils.formatDateTime(${flow.getFirst().endTime})</td>
+              <td>$utils.formatDate(${flow.getFirst().startTime})</td>
+              <td>$utils.formatDate(${flow.getFirst().endTime})</td>
+              <td>$utils.formatDuration(${flow.getFirst().startTime}, ${flow.getFirst().endTime})</td>
               <td>
-                $TimeUtils.formatDuration(${flow.getFirst().startTime}, ${flow.getFirst().endTime})
-              </td>
-              <td>
-                <div class="status ${flow.getFirst().status}">
-                  $WebUtils.formatStatus(${flow.getFirst().status})
-                </div>
+                <div
+                    class="status ${flow.getFirst().status}">$utils.formatStatus(${flow.getFirst().status})</div>
               </td>
               <td>
                 <button type="button" id="cancelbtn" class="btn btn-danger btn-sm"
@@ -136,7 +132,6 @@
 
   <div class="row" id="recently-finished-view">
     <div class="col-xs-12">
-      <i>* Click column headers to sort.</i>
       <table id="recentlyFinished"
              class="table table-striped table-bordered table-hover table-condensed executions-table">
         <thead>
@@ -172,11 +167,11 @@
               </td>
               <td>${flow.submitUser}</td>
               <td>${flow.proxyUsers}</td>
-              <td>$TimeUtils.formatDateTime(${flow.startTime})</td>
-              <td>$TimeUtils.formatDateTime(${flow.endTime})</td>
-              <td>$TimeUtils.formatDuration(${flow.startTime}, ${flow.endTime})</td>
+              <td>$utils.formatDate(${flow.startTime})</td>
+              <td>$utils.formatDate(${flow.endTime})</td>
+              <td>$utils.formatDuration(${flow.startTime}, ${flow.endTime})</td>
               <td>
-                <div class="status ${flow.status}">$WebUtils.formatStatus(${flow.status})</div>
+                <div class="status ${flow.status}">$utils.formatStatus(${flow.status})</div>
               </td>
               <td></td>
             </tr>

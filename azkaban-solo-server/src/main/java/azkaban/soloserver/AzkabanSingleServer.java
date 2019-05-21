@@ -28,14 +28,8 @@ import azkaban.utils.Props;
 import azkaban.webapp.AzkabanWebServer;
 import azkaban.webapp.AzkabanWebServerModule;
 import com.google.inject.Guice;
+import com.google.inject.Inject;
 import com.google.inject.Injector;
-import java.io.File;
-import java.io.IOException;
-import java.security.Permission;
-import java.security.Policy;
-import java.security.ProtectionDomain;
-import javax.inject.Inject;
-import org.apache.commons.io.FileUtils;
 import org.apache.log4j.Logger;
 
 
@@ -53,31 +47,8 @@ public class AzkabanSingleServer {
     this.executor = executor;
   }
 
-  public static void main(final String[] args) {
-    try {
-      start(args);
-    } catch (final Exception e) {
-      log.error("Failed to start single server. Shutting down.", e);
-      System.exit(1);
-    }
-  }
-
-  public static void start(String[] args) throws Exception {
+  public static void main(final String[] args) throws Exception {
     log.info("Starting Azkaban Server");
-
-    if (System.getSecurityManager() == null) {
-      Policy.setPolicy(new Policy() {
-        @Override
-        public boolean implies(final ProtectionDomain domain, final Permission permission) {
-          return true; // allow all
-        }
-      });
-      System.setSecurityManager(new SecurityManager());
-    }
-
-    if (args.length == 0) {
-      args = prepareDefaultConf();
-    }
 
     final Props props = AzkabanServer.loadProps(args);
     if (props == null) {
@@ -96,7 +67,7 @@ public class AzkabanSingleServer {
     /* Initialize Guice Injector */
     final Injector injector = Guice.createInjector(
         new AzkabanCommonModule(props),
-        new AzkabanWebServerModule(props),
+        new AzkabanWebServerModule(),
         new AzkabanExecServerModule()
     );
     SERVICE_PROVIDER.setInjector(injector);
@@ -105,30 +76,11 @@ public class AzkabanSingleServer {
     injector.getInstance(AzkabanSingleServer.class).launch();
   }
 
-  /**
-   * To enable "run out of the box for testing".
-   */
-  private static String[] prepareDefaultConf() throws IOException {
-    final File templateFolder = new File("test/local-conf-templates");
-    final File localConfFolder = new File("local/conf");
-    if (!localConfFolder.exists()) {
-      FileUtils.copyDirectory(templateFolder, localConfFolder.getParentFile());
-      log.info("Copied local conf templates from " + templateFolder.getAbsolutePath());
-    }
-    log.info("Using conf at " + localConfFolder.getAbsolutePath());
-    return new String[]{"-conf", "local/conf"};
-  }
-
   private void launch() throws Exception {
-    // exec server first so that it's ready to accept calls by web server when web initializes
-    AzkabanExecutorServer.launch(this.executor);
-    log.info("Azkaban Exec Server started...");
-
-    this.executor.getFlowRunnerManager()
-        .setExecutorActive(true, this.executor.getHost(), this.executor.getPort());
-    log.info("Azkaban Exec Server activated...");
-
     AzkabanWebServer.launch(this.webServer);
     log.info("Azkaban Web Server started...");
+
+    AzkabanExecutorServer.launch(this.executor);
+    log.info("Azkaban Exec Server started...");
   }
 }

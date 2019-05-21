@@ -17,27 +17,19 @@
 package azkaban.executor.mail;
 
 import azkaban.executor.ExecutableFlow;
-import azkaban.executor.Executor;
-import azkaban.executor.ExecutorManagerException;
 import azkaban.utils.EmailMessage;
-import java.util.List;
 
 public interface MailCreator {
 
-  boolean createFirstErrorMessage(ExecutableFlow flow,
+  public boolean createFirstErrorMessage(ExecutableFlow flow,
       EmailMessage message, String azkabanName, String scheme,
-      String clientHostname, String clientPortNumber);
+      String clientHostname, String clientPortNumber, String... vars);
 
-  boolean createErrorEmail(ExecutableFlow flow, List<ExecutableFlow> pastExecutions,
-      EmailMessage message, String azkabanName, String scheme, String clientHostname,
-      String clientPortNumber, String... reasons);
-
-  boolean createSuccessEmail(ExecutableFlow flow, EmailMessage message,
+  public boolean createErrorEmail(ExecutableFlow flow, EmailMessage message,
       String azkabanName, String scheme, String clientHostname,
-      String clientPortNumber);
+      String clientPortNumber, String... vars);
 
-  boolean createFailedUpdateMessage(List<ExecutableFlow> flows, Executor executor,
-      ExecutorManagerException updateException, EmailMessage message,
+  public boolean createSuccessEmail(ExecutableFlow flow, EmailMessage message,
       String azkabanName, String scheme, String clientHostname,
-      String clientPortNumber);
+      String clientPortNumber, String... vars);
 }

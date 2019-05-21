@@ -23,28 +23,46 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 
 /**
- * Creates DB tables. The input to this class is a folder path, which includes all create table
- * sql scripts. The script's name should follow: create.[table_name].sql in order to be
- * identified. This class is used for unit test only for now.
- *
- * <p>Todo kunkun-tang: We need to fix some reliability issues if we rely on this class to
- * create tables when launching AZ in future.
+ * TODO kunkun-tang: this class is quite messy now, needs to be refactored.
  */
 public class DatabaseSetup {
 
-  private static final Logger logger = Logger .getLogger(DatabaseSetup.class);
+  public static final String DATABASE_SQL_SCRIPT_DIR =
+      "database.sql.scripts.dir";
+  private static final Logger logger = Logger
+      .getLogger(DatabaseSetup.class);
+  private static final String DEFAULT_SCRIPT_PATH = "sql";
   private static final String CREATE_SCRIPT_PREFIX = "create.";
   private static final String SQL_SCRIPT_SUFFIX = ".sql";
 
+  private static final String INSERT_DB_PROPERTY =
+      "INSERT INTO properties (name, type, value, modified_time) values (?,?,?,?)";
+  private static final String UPDATE_DB_PROPERTY =
+      "UPDATE properties SET value=?,modified_time=? WHERE name=? AND type=?";
+
   private final AzkabanDataSource dataSource;
+  private final Set<String> missingTables = new HashSet<>();
+  private final Map<String, String> installedVersions = new HashMap<>();
+  private String version;
+  private boolean needsUpdating;
+
   private String scriptPath = null;
+
+  public DatabaseSetup(final AzkabanDataSource ds) {
+    this.dataSource = ds;
+    if (this.scriptPath == null) {
+      this.scriptPath = DEFAULT_SCRIPT_PATH;
+    }
+  }
 
   public DatabaseSetup(final AzkabanDataSource ds, final String path) {
     this.dataSource = ds;
@@ -53,12 +71,11 @@ public class DatabaseSetup {
 
   public void updateDatabase()
       throws SQLException, IOException {
-    final Set<String> tables = collectAllTables();
-    createTables(tables);
+    findMissingTables();
+    createNewTables();
   }
 
-  private Set<String> collectAllTables() {
-    final Set<String> tables = new HashSet<>();
+  private void findMissingTables() {
     final File directory = new File(this.scriptPath);
     final File[] createScripts =
         directory.listFiles(new PrefixSuffixFileFilter(
@@ -68,38 +85,83 @@ public class DatabaseSetup {
         final String name = script.getName();
         final String[] nameSplit = name.split("\\.");
         final String tableName = nameSplit[1];
-        tables.add(tableName);
+        this.missingTables.add(tableName);
       }
     }
-    return tables;
   }
 
-  private void createTables(final Set<String> tables) throws SQLException, IOException {
+  private void createNewTables() throws SQLException, IOException {
     final Connection conn = this.dataSource.getConnection();
     conn.setAutoCommit(false);
     try {
-      for (final String table : tables) {
-        runTableScripts(conn, table);
+      // Make sure that properties table is created first.
+      if (this.missingTables.contains("properties")) {
+        runTableScripts(conn, "properties", this.version, this.dataSource.getDBType(),
+            false);
+      }
+      for (final String table : this.missingTables) {
+        if (!table.equals("properties")) {
+          runTableScripts(conn, table, this.version, this.dataSource.getDBType(), false);
+          // update version as we have create a new table
+          this.installedVersions.put(table, this.version);
+        }
       }
     } finally {
       conn.close();
     }
   }
 
-  private void runTableScripts(final Connection conn, final String table)
-      throws IOException, SQLException {
-    logger.info("Creating new table " + table);
 
-    final String dbSpecificScript = "create." + table + ".sql";
-    final File script = new File(this.scriptPath, dbSpecificScript);
+  private void runTableScripts(final Connection conn, final String table, final String version,
+      final String dbType, final boolean update) throws IOException, SQLException {
+    String scriptName = "";
+    if (update) {
+      scriptName = "update." + table + "." + version;
+      logger.info("Update table " + table + " to version " + version);
+    } else {
+      scriptName = "create." + table;
+      logger.info("Creating new table " + table + " version " + version);
+    }
+
+    final String dbSpecificScript = scriptName + "." + dbType + ".sql";
+
+    File script = new File(this.scriptPath, dbSpecificScript);
+    if (!script.exists()) {
+      final String dbScript = scriptName + ".sql";
+      script = new File(this.scriptPath, dbScript);
+
+      if (!script.exists()) {
+        throw new IOException("Creation files do not exist for table " + table);
+      }
+    }
+
     BufferedInputStream buff = null;
     try {
       buff = new BufferedInputStream(new FileInputStream(script));
       final String queryStr = IOUtils.toString(buff);
+
       final String[] splitQuery = queryStr.split(";\\s*\n");
+
       final QueryRunner runner = new QueryRunner();
+
       for (final String query : splitQuery) {
         runner.update(conn, query);
+      }
+
+      // If it's properties, then we want to commit the table before we update
+      // it
+      if (table.equals("properties")) {
+        conn.commit();
+      }
+
+      final String propertyName = table + ".version";
+      if (!this.installedVersions.containsKey(table)) {
+        runner.update(conn, INSERT_DB_PROPERTY, propertyName,
+            1, version,
+            System.currentTimeMillis());
+      } else {
+        runner.update(conn, UPDATE_DB_PROPERTY, version,
+            System.currentTimeMillis(), propertyName, 1);
       }
       conn.commit();
     } finally {
@@ -115,7 +177,7 @@ public class DatabaseSetup {
     private final String prefix;
     private final String suffix;
 
-    PrefixSuffixFileFilter(final String prefix, final String suffix) {
+    public PrefixSuffixFileFilter(final String prefix, final String suffix) {
       this.prefix = prefix;
       this.suffix = suffix;
     }
@@ -128,8 +190,11 @@ public class DatabaseSetup {
 
       final String name = pathname.getName();
       final int length = name.length();
-      return this.suffix.length() <= length && this.prefix.length() <= length && name
-          .startsWith(this.prefix) && name.endsWith(this.suffix);
+      if (this.suffix.length() > length || this.prefix.length() > length) {
+        return false;
+      }
+
+      return name.startsWith(this.prefix) && name.endsWith(this.suffix);
     }
   }
 }

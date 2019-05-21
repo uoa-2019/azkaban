@@ -68,7 +68,6 @@
 
     <div class="row">
       <div class="col-xs-12">
-        <i>* Click column headers to sort.</i>
         <table id="scheduledFlowsTbl"
                class="table table-striped table-condensed table-bordered table-hover">
           <thead>
@@ -83,7 +82,6 @@
             <th class="date">Next Execution Time</th>
             <th class="date">Repeats Every</th>
             <th class="date">Cron Expression</th>
-            <th>Execution Options</th>
             <th>Has SLA</th>
             <th colspan="2" class="action ignoresort">Action</th>
           </tr>
@@ -103,10 +101,10 @@
                   <a href="${context}/manager?project=${sched.projectName}">${sched.projectName}</a>
                 </td>
                 <td>${sched.submitUser}</td>
-                <td>$TimeUtils.formatDateTime(${sched.firstSchedTime})</td>
-                <td>$TimeUtils.formatDateTime(${sched.nextExecTime})</td>
+                <td>$utils.formatDateTime(${sched.firstSchedTime})</td>
+                <td>$utils.formatDateTime(${sched.nextExecTime})</td>
                 #if (${sched.period})
-                  <td> $TimeUtils.formatPeriod(${sched.period})</td>
+                  <td> $utils.formatPeriod(${sched.period})</td>
                 #else
                   <td>Not Applicable</td>
                 #end
@@ -115,36 +113,6 @@
                 #else
                   <td>Not Applicable</td>
                 #end
-                <td>
-                ## Changed the style of "Show" button to be consistent with other buttons.
-                  <button type="button" class="btn btn-sm btn-info" data-toggle="modal"
-                          data-target="#executionOptions-${velocityCount}">Show
-                  </button>
-                </td>
-
-              ## Distinguished executionOptions of each schedule with unique count number to fix
-              ## the issue of same display for all schedules
-                <div class="modal fade" id="executionOptions-${velocityCount}" tabindex="-1"
-                     role="dialog"
-                     aria-labelledby="executionOptionsLabel">
-                  <div class="modal-dialog" role="document">
-                    <div class="modal-content">
-                      <div class="modal-header">
-                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                          <span aria-hidden="true">&times;</span></button>
-                        <h4 class="modal-title" id="executionOptionsLabel">Execution Options</h4>
-                      </div>
-                      <div class="modal-body">
-                      ## Used <pre> to display text with code format
-                        <pre>${sched.executionOptions.toJSON()}</pre>
-                      </div>
-                      <div class="modal-footer">
-                        <button type="button" class="btn btn-default" data-dismiss="modal">Close
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
                 <td>#if(${sched.slaOptions}) true #else false #end</td>
                 <td>
                   <button type="button" id="removeSchedBtn" class="btn btn-sm btn-danger"
@@ -161,7 +129,7 @@
               #end
             #else
             <tr>
-              <td colspan="12">No scheduled flow found.</td>
+              <td colspan="11">No scheduled flow found.</td>
             </tr>
             #end
           </tbody>

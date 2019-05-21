@@ -15,33 +15,19 @@
  */
 package azkaban.db;
 
-import azkaban.utils.Props;
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import org.apache.commons.dbcp2.BasicDataSource;
 import org.apache.log4j.Logger;
 
-@Singleton
+
 public class MySQLDataSource extends AzkabanDataSource {
 
   private static final Logger logger = Logger.getLogger(MySQLDataSource.class);
-  private final DBMetrics dbMetrics;
 
-  @Inject
-  public MySQLDataSource(final Props props, final DBMetrics dbMetrics) {
+  public MySQLDataSource(final String host, final int port, final String dbName,
+      final String user, final String password, final int numConnections) {
     super();
-    this.dbMetrics = dbMetrics;
-
-    final int port = props.getInt("mysql.port");
-    final String host = props.getString("mysql.host");
-    final String dbName = props.getString("mysql.database");
-    final String user = props.getString("mysql.user");
-    final String password = props.getString("mysql.password");
-    final int numConnections = props.getInt("mysql.numconnections");
 
     final String url = "jdbc:mysql://" + (host + ":" + port + "/" + dbName);
     addConnectionProperty("useUnicode", "yes");
@@ -54,17 +40,15 @@ public class MySQLDataSource extends AzkabanDataSource {
     setValidationQuery("/* ping */ select 1");
     setTestOnBorrow(true);
   }
+
   /**
    * This method overrides {@link BasicDataSource#getConnection()}, in order to have retry logics.
-   * We don't make the call synchronized in order to guarantee normal cases performance.
    */
   @Override
-  public Connection getConnection() throws SQLException {
+  public synchronized Connection getConnection() throws SQLException {
 
-    this.dbMetrics.markDBConnection();
-    final long startMs = System.currentTimeMillis();
     Connection connection = null;
-    int retryAttempt = 1;
+    int retryAttempt = 0;
     while (retryAttempt < AzDBUtil.MAX_DB_RETRY_COUNT) {
       try {
         /**
@@ -74,61 +58,18 @@ public class MySQLDataSource extends AzkabanDataSource {
          * Every Attempt generates a thread-hanging-time, about 75 seconds, which is hard coded, and can not be changed.
          */
         connection = createDataSource().getConnection();
-
-        /**
-         * If connection is null or connection is read only, retry to find available connection.
-         * When DB fails over from master to slave, master is set to read-only mode. We must keep
-         * finding correct data source and sql connection.
-         */
-        if (connection == null || isReadOnly(connection)) {
-          throw new SQLException("Failed to find DB connection Or connection is read only. ");
-        } else {
-
-          // Evalaute how long it takes to get DB Connection.
-          this.dbMetrics.setDBConnectionTime(System.currentTimeMillis() - startMs);
+        if (connection != null) {
           return connection;
         }
       } catch (final SQLException ex) {
-
-        /**
-         * invalidate connection and reconstruct it later. if remote IP address is not reachable,
-         * it will get hang for a while and throw exception.
-         */
-        this.dbMetrics.markDBFailConnection();
-        try {
-          invalidateConnection(connection);
-        } catch (final Exception e) {
-          logger.error( "can not invalidate connection.", e);
-        }
-        logger.error( "Failed to find write-enabled DB connection. Wait 15 seconds and retry."
-            + " No.Attempt = " + retryAttempt, ex);
-        /**
-         * When database is completed down, DB connection fails to be fetched immediately. So we need
-         * to sleep 15 seconds for retry.
-         */
-        sleep(1000L * 15);
+        logger.error(
+            "Failed to find DB connection. waits 1 minutes and retry. No.Attempt = " + retryAttempt,
+            ex);
+      } finally {
         retryAttempt++;
       }
     }
-    return connection;
-  }
-
-  private boolean isReadOnly(final Connection conn) throws SQLException {
-    final Statement stmt = conn.createStatement();
-    final ResultSet rs = stmt.executeQuery("SELECT @@global.read_only");
-    if (rs.next()) {
-      final int value = rs.getInt(1);
-      return value != 0;
-    }
-    throw new SQLException("can not fetch read only value from DB");
-  }
-
-  private void sleep(final long milliseconds) {
-    try {
-      Thread.sleep(milliseconds);
-    } catch (final InterruptedException e) {
-      logger.error("Sleep interrupted", e);
-    }
+    return null;
   }
 
   @Override
